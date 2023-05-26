@@ -27,7 +27,7 @@ class MLP(nn.Module):
             if act_fn == 'tanh':
                 layers.append(nn.Tanh())
         self.net = nn.Sequential(*layers[:-1])
-        
+
     def forward(self, x):
         return self.net(x)
 
@@ -47,7 +47,7 @@ class GPTConfig:
     def __init__(self, block_size, **kwargs):
         assert kwargs['model_type'] in ['s', 's+a', 's+cot', 's+a+cot'], \
             f"Unsupported model_type: {kwargs['model_type']}"
-        
+
         if '+a' in kwargs['model_type']:  # If the action history is used.
             self.block_size = block_size * 2
         else:
@@ -55,19 +55,19 @@ class GPTConfig:
 
         if 'cot' in kwargs['model_type']:
             # `key_states` specifies which of the key states should be used for CoT.
-            assert 'key_states' in kwargs, 'Should specify `key_states`' 
-            # It is in the form of 'acd...' that represents whether the key 
+            assert 'key_states' in kwargs, 'Should specify `key_states`'
+            # It is in the form of 'acd...' that represents whether the key
             # state x is used. e.g., here a,c,d is used while b is skipped.
             assert kwargs['key_states'] not in ['', None] and \
-                np.all([ord('z') >= ord(g) >= ord('a') for g in kwargs['key_states']])
+                   np.all([ord('z') >= ord(g) >= ord('a') for g in kwargs['key_states']])
 
-            # `key_state_loss` specifies which layer's features in GPT should be used 
+            # `key_state_loss` specifies which layer's features in GPT should be used
             # for for the auxiliary key state prediction losses.
             assert 'key_state_loss' in kwargs, 'Should specify `key_state_loss`'
-            # It is in the form of e.g., '023', meaning the features out of attention 
+            # It is in the form of e.g., '023', meaning the features out of attention
             # layers of idx 0, 2, 3 are used for key state prediction losses.
             assert kwargs['key_state_loss'] not in ['', None] and \
-                np.all([l.isnumeric() for l in kwargs['key_state_loss']])
+                   np.all([l.isnumeric() for l in kwargs['key_state_loss']])
 
             self.key_states = kwargs['key_states']
             self.key_state_loss = kwargs['key_state_loss']
@@ -89,38 +89,38 @@ class CausalSelfAttentionWithCoT(nn.Module):
     def __init__(self, config):
         super().__init__()
         assert config.n_embd % config.n_head == 0
-        
+
         # key, query, value projections for all heads
         self.key = nn.Linear(config.n_embd, config.n_embd)
         self.query = nn.Linear(config.n_embd, config.n_embd)
         self.value = nn.Linear(config.n_embd, config.n_embd)
-        
+
         # regularization
         self.attn_drop = nn.Dropout(config.attn_pdrop)
         self.resid_drop = nn.Dropout(config.resid_pdrop)
-        
+
         # output projection
         self.proj = nn.Linear(config.n_embd, config.n_embd)
-        
+
         # causal mask to ensure that attention is only applied to the left in the input sequence
         block_size = config.block_size + config.len_key_states
-        self.register_buffer("mask", 
-            torch.tril(torch.ones(block_size, block_size)).view(1, 1, block_size, block_size))
-        
+        self.register_buffer("mask",
+                             torch.tril(torch.ones(block_size, block_size)).view(1, 1, block_size, block_size))
+
         self.n_head = config.n_head
         self.model_type = config.model_type
         self.len_key_states = config.len_key_states
 
         # For the learnable key state query tokens, they are actually all-to-all, meaning
-        # they can access to all future tokens during inference, and up to a future step 
-        # randomly selected during training (see `key_state_mask` in forward(...)). 
+        # they can access to all future tokens during inference, and up to a future step
+        # randomly selected during training (see `key_state_mask` in forward(...)).
         self.mask[:, :, :self.len_key_states] = 1.0
 
     def forward(self, x, key_state_mask=None):
         B, T, C = x.size()
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        k = self.key(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)    # (B, nh, T, hs)
+        k = self.key(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
         q = self.query(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
         v = self.value(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
 
@@ -168,7 +168,7 @@ class Block(nn.Module):
 
 class BlocksWithCoT(nn.Module):
     """
-    A wrapper class for a sequence of Transformer blocks with masks specified for 
+    A wrapper class for a sequence of Transformer blocks with masks specified for
     the learnable key state query tokens.
     """
 
@@ -183,13 +183,13 @@ class BlocksWithCoT(nn.Module):
     def forward(self, x, key_state_mask=None):
         B, T, _ = x.shape
 
-        # During training the `key_state_mask` is not specified and we apply random 
-        # masking such that the first t tokens after the key state query tokens are 
+        # During training the `key_state_mask` is not specified and we apply random
+        # masking such that the first t tokens after the key state query tokens are
         # 0's and otherwise 1's, where t is uniformly sampled from 0 to traj length.
-        # Here 1's mean no attention over the underlying masked tokens. 
+        # Here 1's mean no attention over the underlying masked tokens.
         # During inference, the evaluator should specify key state masks.
         if key_state_mask is None:
-            # If use both state and action history, 
+            # If use both state and action history,
             # make sure masks for s and a has the same length.
             if '+a' in self.model_type:
                 r = torch.randint(0, (T - self.len_key_states) // 2, [B])[:, None] * 2
@@ -200,20 +200,20 @@ class BlocksWithCoT(nn.Module):
             key_state_mask = torch.zeros([B, self.n_head, T, T], dtype=torch.bool, device=x.device)
             key_state_mask[:, :, :self.len_key_states, :] = \
                 mask[:, None, None, :].repeat(1, self.n_head, self.len_key_states, 1)
-        
+
         output = []  # Also keep the intermediate results.
         for block in self.block_list:
             x = block(x, key_state_mask=key_state_mask)
             output.append(x)
-        
+
         return x, output
 
 
 class GPTWithCoT(nn.Module):
-    """ 
+    """
     GPT implementation with the support of the learnable key state query tokens,
     which is used for the chain-of-thought predictive control. Here, the context size
-    is specified as block_size, which does not count the key state query tokens. 
+    is specified as block_size, which does not count the key state query tokens.
     """
 
     def __init__(self, config, state_dim=-1, action_dim=-1):
@@ -245,10 +245,10 @@ class GPTWithCoT(nn.Module):
 
         # Transformer (attention layers) with CoT.
         self.blocks = BlocksWithCoT(config)
-        
+
         # State embeddings.
         self.state_encoder = MLP(self.state_dim, config.n_embd, hidden_dims=[256])
-        
+
         # Action embeddings.
         if '+a' in self.model_type:
             self.action_encoder = MLP(self.action_dim, config.n_embd, hidden_dims=[256])
@@ -257,7 +257,7 @@ class GPTWithCoT(nn.Module):
         self.ln = nn.LayerNorm(config.n_embd)
         self.action_predictor = MLP(config.n_embd, action_dim, hidden_dims=[256, 256])
 
-        # Key state predictors. By default, we only use one predictor which takes 
+        # Key state predictors. By default, we only use one predictor which takes
         # features from one attention layer.
         if 'cot' in self.model_type:
             key_state_predictors = []
@@ -266,7 +266,7 @@ class GPTWithCoT(nn.Module):
                     config.n_embd, self.state_dim, hidden_dims=[int(self.cot_decoder)])
                 key_state_predictors.append(key_state_predictor)
             # Register all the key state predictors.
-            self.key_state_predictors = nn.ModuleList(key_state_predictors)  
+            self.key_state_predictors = nn.ModuleList(key_state_predictors)
 
         self.apply(self._init_weights)
         print(f"Total # of parameters: {sum(p.numel() for p in self.parameters())}")
@@ -282,25 +282,25 @@ class GPTWithCoT(nn.Module):
 
     # Given state (and action) history, predict actions (and key states as CoT).
     # `timesteps` is used for the global+local position embedding design similar
-    # to the one in Decision Transformer. `key_state_mask` is used so that the 
-    # (all-to-all) key state query tokens can attend to later tokens. 
+    # to the one in Decision Transformer. `key_state_mask` is used so that the
+    # (all-to-all) key state query tokens can attend to later tokens.
     def forward(self, states, timesteps, actions=None, key_state_mask=None):
         B, T = states.shape[0], states.shape[1]
         state_embeddings = self.state_encoder(states)
 
         # Embeddings for state (action, and key state query) tokens.
-        token_embeddings = torch.zeros([B, self.block_size, self.config.n_embd], 
+        token_embeddings = torch.zeros([B, self.block_size, self.config.n_embd],
                                        dtype=torch.float32, device=states.device)
-        
+
         # If using action history as inputs: during training, all actions are
         # specified; during inference, only actions in the past are specified.
-        # That is, the first action prediction has no action history as inputs. 
-        if '+a' in self.model_type: 
-            token_embeddings[:, :T*2:2, :] = state_embeddings
-            if actions is not None: 
+        # That is, the first action prediction has no action history as inputs.
+        if '+a' in self.model_type:
+            token_embeddings[:, :T * 2:2, :] = state_embeddings
+            if actions is not None:
                 # Assume the last action is not used as inputs during training.
-                token_embeddings[:, 1:T*2-1:2, :] = self.action_encoder(actions[:, :T-1])
-                    
+                token_embeddings[:, 1:T * 2 - 1:2, :] = self.action_encoder(actions[:, :T - 1])
+
         else:
             token_embeddings[:, :T, :] = state_embeddings
 
@@ -316,7 +316,7 @@ class GPTWithCoT(nn.Module):
         if 'cot' in self.model_type:
             key_state_embeddings = self.key_state_pos_emb.repeat(B, 1, 1)
             x = torch.cat([key_state_embeddings, x], 1)
-        
+
         x = self.drop(x)
         x, intermediate_feats = self.blocks(x, key_state_mask=key_state_mask)
         x = self.ln(x)
@@ -330,18 +330,166 @@ class GPTWithCoT(nn.Module):
                         intermediate_feats[loss_layer_idx][:, :self.len_key_states]
                     )
                 )
-                
+
             # Get rid of dims for key state query tokens.
             act_preds = torch.split(act_preds, [self.len_key_states, self.block_size], dim=1)[1]
         else:
             key_state_preds = None
 
-        # Get rid of dims for action tokens. 
+        # Get rid of dims for action tokens.
         if '+a' in self.model_type:
             # Remove the extra tokens when in eval mode.
-            act_preds = act_preds[:, :T*2:2]
+            act_preds = act_preds[:, :T * 2:2]
+        # print(act_preds.shape)
 
-        return act_preds, key_state_preds 
+        return act_preds, key_state_preds
+
+    def configure_adamw_optimizers(self, config):
+        """
+        This long function is unfortunately doing something very simple and is being very defensive:
+        We are separating out all parameters of the module into two buckets: those that will experience
+        weight decay for regularization and those that won't (biases, and layernorm/embedding weights).
+        We are then returning the PyTorch optimizer object.
+        """
+
+        # separate out all parameters to those that will and won't experience regularizing weight decay
+        decay = set()
+        no_decay = set()
+        whitelist_weight_modules = (torch.nn.Linear, torch.nn.Conv2d)
+        blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
+        for mn, m in self.named_modules():
+            for pn, _ in m.named_parameters():
+                fpn = '%s.%s' % (mn, pn) if mn else pn  # full param name
+
+                if pn.endswith('bias'):
+                    # all biases will not be decayed
+                    no_decay.add(fpn)
+                elif pn.endswith('weight') and isinstance(m, whitelist_weight_modules):
+                    # weights of whitelist modules will be weight decayed
+                    decay.add(fpn)
+                elif pn.endswith('weight') and isinstance(m, blacklist_weight_modules):
+                    # weights of blacklist modules will NOT be weight decayed
+                    no_decay.add(fpn)
+
+        # special case the position embedding parameter in the root GPT module as not decayed
+        no_decay.add('local_pos_emb')
+        no_decay.add('global_pos_emb')
+        if 'cot' in self.model_type:
+            no_decay.add('key_state_pos_emb')
+
+        # validate that we considered every parameter
+        param_dict = {pn: p for pn, p in self.named_parameters()}
+        inter_params = decay & no_decay
+        union_params = decay | no_decay
+        assert len(inter_params) == 0, \
+            "parameters %s made it into both decay/no_decay sets!" % (str(inter_params),)
+        assert len(param_dict.keys() - union_params) == 0, \
+            "parameters %s were not separated into either decay/no_decay set!" \
+            % (str(param_dict.keys() - union_params),)
+
+        # create the pytorch optimizer object
+        optim_groups = [
+            {"params": [param_dict[pn] for pn in sorted(list(decay))],
+             "weight_decay": config['weight_decay']},
+            {"params": [param_dict[pn] for pn in sorted(list(no_decay))],
+             "weight_decay": 0.0},
+        ]
+        optimizer = torch.optim.AdamW(
+            optim_groups,
+            lr=config['init_lr'],
+            betas=(config['beta1'], config['beta2'])
+        )
+        return optimizer
+
+
+class KeyNet(nn.Module):
+    """
+    GPT Encoder, to encoder s,a sequence into key states
+    So it is always without cot...
+    """
+    def __init__(self, config, state_dim=-1, action_dim=-1):
+        super().__init__()
+
+        assert state_dim > 0 and action_dim > 0
+        self.config = config
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.model_type = config.model_type
+        self.block_size = config.block_size
+        assert 'cot' not in config.model_type, 'Again, we do not receive cot input in KeyNet'
+
+        p_size = config.block_size // 2 if '+a' in self.model_type else config.block_size
+        self.local_pos_emb = nn.Parameter(torch.zeros(1, p_size, config.n_embd))
+        self.global_pos_emb = nn.Parameter(
+            torch.zeros(1, config.max_timestep, config.n_embd))
+
+        self.drop = nn.Dropout(config.embd_pdrop)
+
+        # Transformer (attention layers) with CoT.
+        self.blocks = BlocksWithCoT(config)
+
+        # State embeddings.
+        self.state_encoder = MLP(self.state_dim, config.n_embd, hidden_dims=[256])
+
+        # Action embeddings.
+        if '+a' in self.model_type:
+            self.action_encoder = MLP(self.action_dim, config.n_embd, hidden_dims=[256])
+
+        # Do not need predictor...
+        self.apply(self._init_weights)
+        print(f"Total # of parameters: {sum(p.numel() for p in self.parameters())}")
+
+    def _init_weights(self, module):
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+            if isinstance(module, nn.Linear) and module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
+
+    # Given state (and action) history, predict actions (and key states as CoT).
+    # `timesteps` is used for the global+local position embedding design similar
+    # to the one in Decision Transformer. `key_state_mask` is used so that the
+    # (all-to-all) key state query tokens can attend to later tokens.
+    def forward(self, states, timesteps, actions=None):
+        B, T = states.shape[0], states.shape[1]
+        state_embeddings = self.state_encoder(states)
+
+        # Embeddings for state (action, and key state query) tokens.
+        token_embeddings = torch.zeros([B, self.block_size, self.config.n_embd],
+                                       dtype=torch.float32, device=states.device)
+
+        # If using action history as inputs: during training, all actions are
+        # specified; during inference, only actions in the past are specified.
+        # That is, the first action prediction has no action history as inputs.
+        if '+a' in self.model_type:
+            token_embeddings[:, :T * 2:2, :] = state_embeddings
+            if actions is not None:
+                # Assume the last action is not used as inputs during training.
+                token_embeddings[:, 1:T * 2 - 1:2, :] = self.action_encoder(actions[:, :T - 1])
+
+        else:
+            token_embeddings[:, :T, :] = state_embeddings
+
+        # Set up position embeddings similar to that in Decision Transformer.
+        global_pos_emb = torch.repeat_interleave(self.global_pos_emb, B, dim=0)
+        timesteps_rp = torch.repeat_interleave(timesteps[:, None], self.config.n_embd, dim=-1)
+        global_pos_emb = torch.gather(
+            global_pos_emb, 1, timesteps_rp.long())  # BS x 1 x D
+        local_pos_emb = torch.repeat_interleave(self.local_pos_emb, 2, dim=1) \
+            if '+a' in self.model_type else self.local_pos_emb
+
+        x = token_embeddings + global_pos_emb + local_pos_emb
+
+        key_emb = self.drop(x)
+        key_emb, intermediate_feats = self.blocks(key_emb)
+        key_emb = self.ln(key_emb)
+
+        # We now only use the last state as key state embedding feature
+        # Also, we can use the embedded states and action, namely the initial x
+        # And the states number T
+        return key_emb[:, -1], x, T
 
     def configure_adamw_optimizers(self, config):
         """
@@ -390,12 +538,145 @@ class GPTWithCoT(nn.Module):
         optim_groups = [
             {"params": [param_dict[pn] for pn in sorted(list(decay))],
              "weight_decay": config['weight_decay']},
-            {"params": [param_dict[pn] for pn in sorted(list(no_decay))], 
+            {"params": [param_dict[pn] for pn in sorted(list(no_decay))],
              "weight_decay": 0.0},
         ]
         optimizer = torch.optim.AdamW(
-            optim_groups, 
-            lr=config['init_lr'], 
+            optim_groups,
+            lr=config['init_lr'],
+            betas=(config['beta1'], config['beta2'])
+        )
+        return optimizer
+
+
+class ActNet(nn.Module):
+    """
+    GPT Decoder, to decode key_state_prompt, s,a sequence into action prediction
+    So it is always with cot
+    """
+
+    def __init__(self, config, state_dim=-1, action_dim=-1):
+        super().__init__()
+
+        assert state_dim > 0 and action_dim > 0
+        self.config = config
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+
+        assert 'cot' in config.model_type
+        self.model_type = config.model_type
+        self.key_states = config.key_states
+        self.key_state_loss = config.key_state_loss
+        self.len_key_states = config.len_key_states
+        self.block_size = config.block_size
+        self.cot_decoder = config.cot_decoder
+
+        # Set up learnable position embedding synchronized for s and a tokens, as proposed
+        # in Decision Transformer. We use a similar global+local position embedding design.
+        p_size = config.block_size // 2 if '+a' in self.model_type else config.block_size
+        self.local_pos_emb = nn.Parameter(torch.zeros(1, p_size, config.n_embd))
+        self.global_pos_emb = nn.Parameter(
+            torch.zeros(1, config.max_timestep, config.n_embd))
+
+        # We must have cot!!!
+        self.drop = nn.Dropout(config.embd_pdrop)
+
+        # We do not need key_state_pos_emb for our output from keynet is trying to do it
+        self.key_state_pos_emb = nn.Parameter(
+            torch.zeros(1, self.len_key_states, config.n_embd))
+
+        # Transformer (attention layers) with CoT.
+        self.blocks = BlocksWithCoT(config)
+
+        # No state and action embeddings
+
+        # Action predictor.
+        self.ln = nn.LayerNorm(config.n_embd)
+        self.action_predictor = MLP(config.n_embd, action_dim, hidden_dims=[256, 256])
+
+        # Still do not need key state predictor for we do not need the output of key states
+
+        self.apply(self._init_weights)
+        print(f"Total # of parameters: {sum(p.numel() for p in self.parameters())}")
+
+    def _init_weights(self, module):
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+            if isinstance(module, nn.Linear) and module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
+
+    def forward(self, key_emb_out, x, T, key_state_mask=None):
+        x = torch.cat([key_emb_out, x], 1)
+        x, intermediate_feats = self.blocks(x, key_state_mask=key_state_mask)
+        x = self.ln(x)
+        act_preds = self.action_predictor(x)
+
+        act_preds = torch.split(act_preds, [self.len_key_states, self.block_size], dim=1)[1]
+
+        # Get rid of dims for action tokens.
+        if '+a' in self.model_type:
+            # Remove the extra tokens when in eval mode.
+            act_preds = act_preds[:, :T * 2:2]
+
+        # Only have act_preds output
+        return act_preds
+
+    def configure_adamw_optimizers(self, config):
+        """
+        This long function is unfortunately doing something very simple and is being very defensive:
+        We are separating out all parameters of the module into two buckets: those that will experience
+        weight decay for regularization and those that won't (biases, and layernorm/embedding weights).
+        We are then returning the PyTorch optimizer object.
+        """
+
+        # separate out all parameters to those that will and won't experience regularizing weight decay
+        decay = set()
+        no_decay = set()
+        whitelist_weight_modules = (torch.nn.Linear, torch.nn.Conv2d)
+        blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
+        for mn, m in self.named_modules():
+            for pn, _ in m.named_parameters():
+                fpn = '%s.%s' % (mn, pn) if mn else pn # full param name
+
+                if pn.endswith('bias'):
+                    # all biases will not be decayed
+                    no_decay.add(fpn)
+                elif pn.endswith('weight') and isinstance(m, whitelist_weight_modules):
+                    # weights of whitelist modules will be weight decayed
+                    decay.add(fpn)
+                elif pn.endswith('weight') and isinstance(m, blacklist_weight_modules):
+                    # weights of blacklist modules will NOT be weight decayed
+                    no_decay.add(fpn)
+
+        # special case the position embedding parameter in the root GPT module as not decayed
+        no_decay.add('local_pos_emb')
+        no_decay.add('global_pos_emb')
+        if 'cot' in self.model_type:
+            no_decay.add('key_state_pos_emb')
+
+        # validate that we considered every parameter
+        param_dict = {pn: p for pn, p in self.named_parameters()}
+        inter_params = decay & no_decay
+        union_params = decay | no_decay
+        assert len(inter_params) == 0, \
+            "parameters %s made it into both decay/no_decay sets!" % (str(inter_params), )
+        assert len(param_dict.keys() - union_params) == 0, \
+            "parameters %s were not separated into either decay/no_decay set!" \
+                % (str(param_dict.keys() - union_params), )
+
+        # create the pytorch optimizer object
+        optim_groups = [
+            {"params": [param_dict[pn] for pn in sorted(list(decay))],
+             "weight_decay": config['weight_decay']},
+            {"params": [param_dict[pn] for pn in sorted(list(no_decay))],
+             "weight_decay": 0.0},
+        ]
+        optimizer = torch.optim.AdamW(
+            optim_groups,
+            lr=config['init_lr'],
             betas=(config['beta1'], config['beta2'])
         )
         return optimizer

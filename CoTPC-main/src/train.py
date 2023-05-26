@@ -45,7 +45,7 @@ def parse_args():
     parser.add_argument("--key_state_coeff", default=0.0, type=float, 
                         help="Coefficient for the key state prediction loss.")
     parser.add_argument('--model_type', type=str, default='s+a+cot', 
-                        help="Model type for the CoTPC model (see GPTConfig).")
+                        help="Model type for the CoTPC module (see GPTConfig).")
     parser.add_argument('--key_states', type=str, default='a', 
                         help="Which key states to use (see GPTConfig for the spec. format).")
     parser.add_argument("--key_state_loss", default='', type=str, 
@@ -53,10 +53,10 @@ def parse_args():
                         "losses (see GPTConfig for the spec. format).")
     parser.add_argument('--cot_decoder', type=str, default='256', help="Specs of the CoT decoder.")
 
-    # General hyper-parameters regarding model loading and saving
+    # General hyper-parameters regarding module loading and saving
     parser.add_argument("--model_name", default='', type=str, help="Model name (for storing ckpts).")
-    parser.add_argument("--from_model_name", default='', type=str, help="Name of the pretrained model.")
-    parser.add_argument("--from_ckpt", default=-1, type=int, help="Ckpt of pretrained model.")
+    parser.add_argument("--from_model_name", default='', type=str, help="Name of the pretrained module.")
+    parser.add_argument("--from_ckpt", default=-1, type=int, help="Ckpt of pretrained module.")
     
     # Hyper-parameters regarding the demo dataset
     parser.add_argument('--task', type=str, default='PickCube-v0', help="Task (env-id) in ManiSkill2.")
@@ -64,7 +64,7 @@ def parse_args():
                         help="Control mode used in envs from ManiSkill2.")
     parser.add_argument('--obs_mode', type=str, default='state', 
                         help="State mode used in envs from ManiSkill2.")
-    parser.add_argument("--seed", default=0, type=int,help="Random seed for data spliting.")
+    parser.add_argument("--seed", default=0, type=int, help="Random seed for data spliting.")
     parser.add_argument("--num_traj", default=-1, type=int, help="Number of training trajectories.")
     parser.add_argument('--context_length', type=int, default=60, 
                         help="Context size of CoTPC (the maximium length of sequences " +
@@ -73,7 +73,7 @@ def parse_args():
                         help="Mininum length of sequences sampled from demo trajectories in training.")
 
     # Save and log frequencies.
-    parser.add_argument("--save_every", default=40000, type=int, help="Save model every # iters.")
+    parser.add_argument("--save_every", default=40000, type=int, help="Save module every # iters.")
     parser.add_argument("--log_every", default=2000, type=int, help="log metrics every # iters.")
     
     # General hyper-parameters for the GPT architecture.
@@ -185,7 +185,7 @@ if __name__ == "__main__":
     model_path = os.path.join(MODEL_PATH, args.model_name)
     os.makedirs(model_path, exist_ok=True)
 
-    # If loaded from pretrained model first.
+    # If loaded from pretrained module first.
     if args.from_ckpt > 0:  
         if args.from_model_name:
             path = os.path.join(
@@ -193,7 +193,7 @@ if __name__ == "__main__":
         else:
             path = os.path.join(model_path, f'{args.from_ckpt}.pth')
         model.load_state_dict(torch.load(path), strict=True)
-        print(f'Pretrained model loaded from {path}.')
+        print(f'Pretrained module loaded from {path}.')
 
     log_path = os.path.join(model_path, 'log.txt')
     if USE_WANDB:
@@ -226,7 +226,7 @@ if __name__ == "__main__":
         batch = {k: v.cuda() for k, v in batch.items()}
                         
         # Forward pass.
-        act_pred,  key_states_pred = model(batch['s'], batch['t'], batch['a'])
+        act_pred, key_states_pred = model(batch['s'], batch['t'], batch['a'])
         
         # Obtain training losses.
         loss_act_pred = get_loss(act_pred, batch['a'], batch['lengths'])
@@ -267,7 +267,7 @@ if __name__ == "__main__":
         if idx > 0 and idx % args.save_every == 0:
             save_path = os.path.join(model_path, f'{idx}.pth')
             torch.save({
-                'model': model.state_dict(), 
+                'module': model.state_dict(),
                 'metadata': vars(args)
             }, save_path)
     

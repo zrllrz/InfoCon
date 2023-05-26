@@ -47,7 +47,10 @@ class MS2Demos(Dataset):
 
     def __getitem__(self, index):
         # Offset by one since the last obs does not have a corresponding action.
-        l = len(self.data['obs'][index]) - 1 
+        # print(self.data.keys())
+        # for k, v in self.data.items():
+        #     print(k, type(v))
+        l = len(self.data['obs'][index]) - 1
 
         # Sample starting and ending index given the min and max traj length.
         if self.min_seq_length is None and self.max_seq_length is None:
@@ -65,7 +68,7 @@ class MS2Demos(Dataset):
                 e_idx = s_idx + length
             else:
                 s_idx, e_idx = 0, l
-        assert e_idx <= l, f'{e_idx}, {l}'
+        assert e_idx <= l, f'end of idx greater than l, e_idx={e_idx}, l={l}'
 
         # Call get_key_states() if you want to use the key states.
         # Here `s` is the state observation, `a` is the action, 
@@ -81,6 +84,8 @@ class MS2Demos(Dataset):
             if f'key_states_{index}' not in self.idx_to_key_states:
                 self.idx_to_key_states[f'key_states_{index}'] = self.get_key_states(index)
             data_dict['k'] = self.idx_to_key_states[f'key_states_{index}']
+        # for k, v in data_dict.items():
+        #     print(k, v.shape)
         return data_dict
 
     def info(self):  # Get observation and action shapes.
@@ -257,12 +262,12 @@ if __name__ == "__main__":
     # The default values for CoTPC for tasks in ManiSkill2.
     batch_size, num_traj, seed, min_seq_length, max_seq_length, task = \
         256, 500, 0, 60, 60, 'PickCube-v0'
-    batch_size, num_traj, seed, min_seq_length, max_seq_length, task = \
-        256, 500, 0, 60, 60, 'PushChair-v1'
+    # batch_size, num_traj, seed, min_seq_length, max_seq_length, task = \
+    #     256, 500, 0, 60, 60, 'PushChair-v1'
 
     train_dataset = MS2Demos(
         # control_mode='pd_joint_delta_pos', 
-        control_mode='base_pd_joint_vel_arm_pd_joint_vel', 
+        control_mode='pd_joint_delta_pos',
         length=num_traj, seed=seed,
         min_seq_length=min_seq_length, 
         max_seq_length=max_seq_length,
@@ -272,14 +277,15 @@ if __name__ == "__main__":
     collate_fn = get_padding_fn(['s', 'a', 't', 'k'])
     train_data = DataLoader(
         dataset=train_dataset, 
-        batch_size=batch_size, 
+        batch_size=1,  # batch_size,
         collate_fn=collate_fn)
-    
+
     data_iter = iter(train_data)
     data = next(data_iter)
+    # print(data.keys())
     # print(len(data))  # 4  
     # for k, v in data.items():
-    #     print(k, v.shape)
+        # print(k, v.shape)
         # 's', [256, 60, 51]
         # 'a', [256, 60, 8]
         # 't', [256, 1]

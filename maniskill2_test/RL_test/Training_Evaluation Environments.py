@@ -65,7 +65,7 @@ from stable_baselines3 import PPO
 set_random_seed(0) # set SB3's global seed to 0
 rollout_steps = 3200
 
-# create our model
+# create our module
 policy_kwargs = dict(net_arch=[256, 256])
 model = PPO(
     "MlpPolicy", env, policy_kwargs=policy_kwargs, verbose=1,
@@ -81,5 +81,5 @@ model = PPO(
 model.learn(400_000, callback=[checkpoint_callback, eval_callback])
 model.save("./logs/latest_model")
 
-# optionally load back the model that was saved
+# optionally load back the module that was saved
 model = model.load("./logs/latest_model")

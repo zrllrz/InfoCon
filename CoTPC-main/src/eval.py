@@ -44,7 +44,7 @@ def predict(model, action_hist, state_hist, t):
         n_head, S = model.config.n_head, states.shape[1] - 1  # Exclude the init state.
 
         # Masks for the all-to-all key state query tokens in attention layers.
-        # The built-in masks for causal (auto-regressive) tokens are in `model.py`.
+        # The built-in masks for causal (auto-regressive) tokens are in `module.py`.
         key_state_mask = torch.zeros([B, n_head, T, T], dtype=bool)
         m1 = torch.arange(0, T).repeat(B, 1)
         m2 = torch.ones([B, 1]) * (S * 2 + model.len_key_states)
@@ -85,11 +85,11 @@ def parse_args():
                         help="Control mode used in envs from ManiSkill2.")
     parser.add_argument('--obs_mode', type=str, default='state', 
                         help="State mode used in envs from ManiSkill2.")
-    parser.add_argument("--seed", default=0, type=int,help="Random seed for data spliting.")
+    parser.add_argument("--seed", default=0, type=int, help="Random seed for data spliting.")
 
-    # Hyper-parameters regarding the model.
+    # Hyper-parameters regarding the module.
     parser.add_argument("--model_name", default='', type=str, help="Model name to be loaded.")
-    parser.add_argument("--from_ckpt", default=-1, type=int, help="Ckpt of the model to be loaded.")
+    parser.add_argument("--from_ckpt", default=-1, type=int, help="Ckpt of the module to be loaded.")
     
     parser.add_argument("--eval_max_steps", default=200, type=int, help="Max steps allowed in eval.")
     parser.add_argument('--cot_decoder', type=str, default='256', help="Specs of the CoT decoder.")
@@ -103,11 +103,11 @@ if __name__ == "__main__":
     assert args.model_name, 'Should specify --model_name'
     assert args.from_ckpt > 0, 'Should specify --from_ckpt'
 
-    # Load the model.
+    # Load the module.
     path = os.path.join(MODEL_PATH, f'{args.model_name}/{args.from_ckpt}.pth')
     # Load to cpu first to avoid cuda related errors from ManiSkill2.
     ckpt = torch.load(path, map_location=torch.device('cpu'))
-    state_dict_from_ckpt, params = ckpt['model'], ckpt['metadata']
+    state_dict_from_ckpt, params = ckpt['module'], ckpt['metadata']
     state_dim = state_dict_from_ckpt['state_encoder.net.0.weight'].shape[1]
     action_dim = state_dict_from_ckpt['action_encoder.net.0.weight'].shape[1]
     max_timestep = state_dict_from_ckpt['global_pos_emb'].shape[1]
@@ -144,7 +144,7 @@ if __name__ == "__main__":
             len(json_data["episodes"]))[:params['num_traj']][:500]
         
     n_env = 25  # Number of parallel environments.
-    assert len(eval_ids) % n_env == 0, f'{len(eval_ids)}'
+    assert len(eval_ids) % n_env == 0, f'indivisible {len(eval_ids)}, {n_env}'
     envs = get_mp_envs(args.task, n_env, **env_kwargs)
 
     # Load the ckpt after envs init to avoid cuda related errors from ManiSkill2.
