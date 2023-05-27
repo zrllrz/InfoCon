@@ -44,7 +44,7 @@ class BaseConfig:
 
 
 class KeyNetConfig(BaseConfig):
-    def __init__(self, block_size, n_embd, n_head, attn_pdrop, resid_pdrop, model_type, embd_pdrop, max_timestep):
+    def __init__(self, block_size, n_embd, n_head, model_type, attn_pdrop, resid_pdrop, embd_pdrop, max_timestep):
         super().__init__(block_size, n_embd, n_head, attn_pdrop, resid_pdrop)
         assert 'cot' not in model_type, 'KeyNet cannot process key states input'
         if '+a' in model_type:

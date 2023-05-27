@@ -1,2 +1,2 @@
-MODEL_PATH = ""
+MODEL_PATH = "model_checkpoints/"
 DATA_PATH = ""
