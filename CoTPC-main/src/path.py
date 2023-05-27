@@ -1,2 +1,2 @@
 DATA_PATH = "../data"
-MODEL_PATH = ""
+MODEL_PATH = "../save_model"

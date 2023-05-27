@@ -569,21 +569,13 @@ class ActNet(nn.Module):
         self.key_state_loss = config.key_state_loss
         self.len_key_states = config.len_key_states
         self.block_size = config.block_size
-        self.cot_decoder = config.cot_decoder
 
-        # Set up learnable position embedding synchronized for s and a tokens, as proposed
-        # in Decision Transformer. We use a similar global+local position embedding design.
-        p_size = config.block_size // 2 if '+a' in self.model_type else config.block_size
-        self.local_pos_emb = nn.Parameter(torch.zeros(1, p_size, config.n_embd))
-        self.global_pos_emb = nn.Parameter(
-            torch.zeros(1, config.max_timestep, config.n_embd))
-
-        # We must have cot!!!
         self.drop = nn.Dropout(config.embd_pdrop)
 
+        # We must have cot!!!
         # We do not need key_state_pos_emb for our output from keynet is trying to do it
-        self.key_state_pos_emb = nn.Parameter(
-            torch.zeros(1, self.len_key_states, config.n_embd))
+        # self.key_state_pos_emb = nn.Parameter(
+        #     torch.zeros(1, self.len_key_states, config.n_embd))
 
         # Transformer (attention layers) with CoT.
         self.blocks = BlocksWithCoT(config)

@@ -7,7 +7,7 @@ from torch.nn.utils.rnn import pad_sequence
 import torch
 
 # Please specify the DATA_PATH (the base folder for storing data) in `path.py`.
-from path import DATA_PATH
+from .path import DATA_PATH
 
 
 class MS2Demos(Dataset):
@@ -288,17 +288,15 @@ if __name__ == "__main__":
     collate_fn = get_padding_fn(['s', 'a', 't', 'k'])
     train_data = DataLoader(
         dataset=train_dataset, 
-        batch_size=4,  # batch_size,
+        batch_size=1,  # batch_size,
         collate_fn=collate_fn)
 
     data_iter = iter(train_data)
     data = next(data_iter)
-    print(data.keys())
-    print(len(data))  # 4
-    for k, v in data.items():
-        print(k, v.shape)
-    print(data['t'])
-    print(data['lengths'])
+    # print(data.keys())
+    # print(len(data))  # 4  
+    # for k, v in data.items():
+        # print(k, v.shape)
         # 's', [256, 60, 51]
         # 'a', [256, 60, 8]
         # 't', [256, 1]
