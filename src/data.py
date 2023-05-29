@@ -7,7 +7,22 @@ from torch.nn.utils.rnn import pad_sequence
 import torch
 
 # Please specify the DATA_PATH (the base folder for storing data) in `path.py`.
-from .path import DATA_PATH
+from path import DATA_PATH
+
+def stepfunctionlist(milestones):
+    """
+    return a step function like list with minestones.
+    Example:
+    minestones = np.ndArray([4, 9, 14])
+    we generate a np.ndArray of len 15:
+    [0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2]
+                 4              9             14
+    """
+    lens = milestones[-1] + 1
+    res = np.zeros(shape=(lens,))
+    for ms in milestones:
+        res[ms+1:] += 1
+    return res
 
 
 class MS2Demos(Dataset):
@@ -43,6 +58,7 @@ class MS2Demos(Dataset):
         # Cache key states for faster data loading.
         if self.with_key_states:
             self.idx_to_key_states = dict()
+            self.idx_to_key_states_label = dict()
 
     def __len__(self):
         return len(self.data['env_states'])
@@ -84,8 +100,11 @@ class MS2Demos(Dataset):
         }     
         if self.with_key_states:
             if f'key_states_{index}' not in self.idx_to_key_states:
-                self.idx_to_key_states[f'key_states_{index}'] = self.get_key_states(index)
-            data_dict['k'] = self.idx_to_key_states[f'key_states_{index}']
+                self.idx_to_key_states[f'key_states_{index}'], self.idx_to_key_states_label[f'key_states_{index}'] \
+                    = self.get_key_states(index)
+            data_dict['k'], data_dict['k_label'] =\
+                self.idx_to_key_states[f'key_states_{index}'],\
+                self.idx_to_key_states_label[f'key_states_{index}'][s_idx:e_idx].astype(np.int32)
         # for k, v in data_dict.items():
         #     print(k, v.shape)
         return data_dict
@@ -165,6 +184,7 @@ class MS2Demos(Dataset):
         # Note that `infos` is for the next obs rather than the current obs.
         # Thus, we need to offset the `step_idx`` by one.
         key_states = []
+        key_states_idx = []
 
         # If TurnFaucet (two key states)
         # key state I: is_contacted -> true
@@ -172,7 +192,8 @@ class MS2Demos(Dataset):
         if self.task == 'TurnFaucet-v0':
             for step_idx, key in enumerate(self.data['infos/is_contacted'][idx]):
                 if key: break
-            key_states.append(self.data['obs'][idx][step_idx+1].astype(np.float32))
+            key_states.append(self.data['obs'][idx][step_idx + 1].astype(np.float32))
+            key_states_idx.append(step_idx + 1)
 
         # If PegInsertion (three key states)
         # key state I: is_grasped -> true
@@ -182,9 +203,11 @@ class MS2Demos(Dataset):
             for step_idx, key in enumerate(self.data['infos/is_grasped'][idx]):
                 if key: break
             key_states.append(self.data['obs'][idx][step_idx+1].astype(np.float32))
+            key_states_idx.append(step_idx + 1)
             for step_idx, key in enumerate(self.data['infos/pre_inserted'][idx]):
                 if key: break
             key_states.append(self.data['obs'][idx][step_idx+1].astype(np.float32))
+            key_states_idx.append(step_idx + 1)
         
         # If PickCube (two key states)
         # key state I: is_grasped -> true
@@ -193,6 +216,7 @@ class MS2Demos(Dataset):
             for step_idx, key in enumerate(self.data['infos/is_grasped'][idx]):
                 if key: break
             key_states.append(self.data['obs'][idx][step_idx+1].astype(np.float32))
+            key_states_idx.append(step_idx + 1)
         
         # If StackCube (three key states)
         # key state I: is_cubaA_grasped -> true
@@ -203,11 +227,13 @@ class MS2Demos(Dataset):
             for step_idx, key in enumerate(self.data['infos/is_cubaA_grasped'][idx]):
                 if key: break
             key_states.append(self.data['obs'][idx][step_idx+1].astype(np.float32))
+            key_states_idx.append(step_idx + 1)
             for step_idx, k1 in enumerate(self.data['infos/is_cubeA_on_cubeB'][idx]):
                 k2 = self.data['infos/is_cubaA_grasped'][idx][step_idx]
                 if k1 and not k2: break
             # Right before such a state and so we do not use step_idx+1.
             key_states.append(self.data['obs'][idx][step_idx].astype(np.float32))
+            key_states_idx.append(step_idx)
 
         # If PushChair (four key states):
         # key state I: right before demo_rotate -> true
@@ -221,24 +247,31 @@ class MS2Demos(Dataset):
                 if key: break
             lengths.append(step_idx)
             key_states.append(self.data['obs'][idx][step_idx].astype(np.float32))
+            key_states_idx.append(step_idx)
             for step_idx, key in enumerate(self.data['infos/demo_move'][idx]):
                 if key: break
             lengths.append(step_idx - np.sum(lengths))
-            key_states.append(self.data['obs'][idx][step_idx].astype(np.float32))  
+            key_states.append(self.data['obs'][idx][step_idx].astype(np.float32))
+            key_states_idx.append(step_idx)
             for step_idx, key in enumerate(np.bitwise_and(
                     self.data['infos/chair_close_to_target'][idx],
                     self.data['infos/chair_standing'][idx])):
                 if key: break
             lengths.append(step_idx + 1 - np.sum(lengths))
             key_states.append(self.data['obs'][idx][step_idx+1].astype(np.float32))
+            key_states_idx.append(step_idx + 1)
             lengths.append(len(self.data['infos/success'][idx]) - np.sum(lengths))
 
         # Always append the last state in the trajectory as the last key state.
         key_states.append(self.data['obs'][idx][-1].astype(np.float32))
+        key_states_idx.append(len(self.data['obs'][idx]) - 1)
+        # print(key_states_idx)
+        key_states_label = stepfunctionlist(np.array(key_states_idx))
+        # print(key_states_label)
 
         key_states = np.stack(key_states, 0).astype(np.float32)
         assert len(key_states) > 0, self.task
-        return key_states
+        return key_states, key_states_label
 
 
 # To obtain the padding function for sequences.
@@ -272,7 +305,7 @@ if __name__ == "__main__":
     
     # The default values for CoTPC for tasks in ManiSkill2.
     batch_size, num_traj, seed, min_seq_length, max_seq_length, task = \
-        256, 500, 0, 60, 60, 'PickCube-v0'
+        256, 500, 0, 60, 60, 'PegInsertionSide-v0'
     # batch_size, num_traj, seed, min_seq_length, max_seq_length, task = \
     #     256, 500, 0, 60, 60, 'PushChair-v1'
 
@@ -285,7 +318,7 @@ if __name__ == "__main__":
         with_key_states=True,
         task=task)
 
-    collate_fn = get_padding_fn(['s', 'a', 't', 'k'])
+    collate_fn = get_padding_fn(['s', 'a', 't', 'k', 'k_label'])
     train_data = DataLoader(
         dataset=train_dataset, 
         batch_size=1,  # batch_size,
@@ -295,8 +328,10 @@ if __name__ == "__main__":
     data = next(data_iter)
     # print(data.keys())
     # print(len(data))  # 4  
-    # for k, v in data.items():
-        # print(k, v.shape)
+    for k, v in data.items():
+        print(k, v.shape)
+        if k == 'k_label':
+            print(v)
         # 's', [256, 60, 51]
         # 'a', [256, 60, 8]
         # 't', [256, 1]

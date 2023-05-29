@@ -134,7 +134,9 @@ class VQ2Linear(nn.Module):
         super().__init__()
         self.n_e = n_e
         self.e_dim = e_dim
+
         self.beta = beta
+        print('in init of VQ2Linear', self.beta, type(self.beta))
         self.legacy = legacy
 
         self.embedding = nn.Embedding(self.n_e, self.e_dim)

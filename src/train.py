@@ -8,15 +8,17 @@ import torch.nn.functional as F
 
 import pytorch_lightning as pl
 
-from .data import MS2Demos, get_padding_fn
-from .autocot import (
+from data import MS2Demos, get_padding_fn
+from autocot import (
     KeyNetConfig,
     ActNetConfig,
     AutoCoT,
 )
-from .lr_scheduler import CosineAnnealingLRWarmup
+from lr_scheduler import CosineAnnealingLRWarmup
 
 from path import MODEL_PATH
+
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 '''
 Parsing Commandline Input
@@ -33,6 +35,12 @@ def parse_args():
     parser.add_argument("--dropout", default='0.0', type=str, help="Dropout probability.")
     parser.add_argument("--lr_schedule", default='cos_decay_with_warmup', type=str,
                         help="The learning rate schedule.")
+    parser.add_argument("--t_warmup", default=1000, type=int,
+                        help="(Make sure you're using \'CosineAnnealingLRWarmup\') Warm-up iteration steps")
+    parser.add_argument("--milestones", default=[78000], type=list,
+                        help="(Make sure you're using \'MultiStepLR\') Time steps to decay lr")
+    parser.add_argument("--gamma", default='0.1', type=str,
+                        help="(Make sure you're using \'MultiStepLR\') Decay of lr after each milestone step")
 
     # General hyper-parameters for the GPT architecture.
     parser.add_argument("--n_head", default=8, type=int, help="Number of attention heads.")
@@ -44,7 +52,7 @@ def parse_args():
                         help="Number of attention layers in KeyNet")
     parser.add_argument('--len_book', type=int, default=10,
                         help="Length of the Key States Codebook")
-    parser.add_argument('--vq_beta', type=float, default=2.0,
+    parser.add_argument('--vq_beta', type=str, default='2.0',
                         help="Coefficient in the VQ loss")
     parser.add_argument('--vq_legacy', type=bool, default=False,
                         help="Place that add vq_beta, should always be False")
@@ -56,7 +64,7 @@ def parse_args():
                         help="Which key states to use (see GPTConfig for the spec. format).")
 
     # General hyper-parameters regarding module loading and saving
-    parser.add_argument("--model_name", default='', type=str, help="Model name (for storing ckpts).")
+    parser.add_argument("--model_name", default='TEST', type=str, help="Model name (for storing ckpts).")
     parser.add_argument("--from_model_name", default='', type=str, help="Name of the pretrained module.")
     parser.add_argument("--from_ckpt", default=-1, type=int, help="Ckpt of pretrained module.")
 
@@ -67,7 +75,7 @@ def parse_args():
     parser.add_argument('--obs_mode', type=str, default='state',
                         help="State mode used in envs from ManiSkill2.")
     parser.add_argument("--seed", default=0, type=int, help="Random seed for data spliting.")
-    parser.add_argument("--num_traj", default=-1, type=int, help="Number of training trajectories.")
+    parser.add_argument("--num_traj", default=1, type=int, help="Number of training trajectories.")
     parser.add_argument('--context_length', type=int, default=60,
                         help="Context size of CoTPC (the maximium length of sequences " +
                              "sampled from demo trajectories in training).")
@@ -79,9 +87,9 @@ def parse_args():
     parser.add_argument("--log_every", default=2000, type=int, help="log metrics every # iters.")
 
     # For faster data loader.
-    parser.add_argument("--num_workers", default=2, type=int,
+    parser.add_argument("--num_workers", default=5, type=int,
                         help="A positive number for fast async data loading.")
-    parser.add_argument('--multiplier', type=int, default=20,
+    parser.add_argument('--multiplier', type=int, default=10000,
                         help="Duplicate the dataset to reduce data loader overhead.")
 
     return parser.parse_args()
@@ -114,10 +122,12 @@ if __name__ == "__main__":
         collate_fn=collate_fn,
         drop_last=True,
     )
+    data_iter = iter(train_data)
 
     state_dim, action_dim = train_dataset.info()
     key_config = KeyNetConfig(
         block_size=args.context_length,
+        n_layer=args.n_key_layer,
         n_embd=args.n_embd,
         n_head=args.n_head,
         model_type=args.keynet_type,
@@ -128,6 +138,7 @@ if __name__ == "__main__":
     )
     act_config = ActNetConfig(
         block_size=args.context_length,
+        n_layer=args.n_act_layer,
         n_embd=args.n_embd,
         n_head=args.n_head,
         model_type=args.actnet_type,
@@ -136,19 +147,62 @@ if __name__ == "__main__":
         key_states=args.key_states
     )
     optimizer_config = {
-        'init_lr': args.init_lr,
-        'weight_decay': args.weight_decay,
-        'beta1': args.beta1,
-        'beta2': args.beta2,
+        'init_lr': float(args.init_lr),
+        'weight_decay': float(args.weight_decay),
+        'beta1': float(args.beta1),
+        'beta2': float(args.beta2),
     }
+    assert args.lr_schedule in ['cos_decay_with_warmup', 'multistep', None], 'Unknown lr scheduler'
+    if args.lr_schedule == 'cos_decay_with_warmup':
+        scheduler_config = {
+            'type': 'cos_decay_with_warmup',
+            't_max': args.n_iters,
+            't_warmup': args.t_warmup
+        }
+    elif args.lr_schedule == 'multistep':
+        scheduler_config = {
+            'type': 'multistep',
+            'milestones': args.milestones,
+            'gamma': float(args.gamma)
+        }
+    else:
+        scheduler_config = None
+
     autocot_model = AutoCoT(
         key_config=key_config,
         len_book=args.len_book,
-        vq_beta=args.vq_beta,
+        vq_beta=float(args.vq_beta),
         vq_legacy=args.vq_legacy,
         act_config=act_config,
         optimizers_config=optimizer_config,
+        scheduler_config=scheduler_config,
         state_dim=state_dim,
         action_dim=action_dim
+    )
+
+    # autocot_model.configure_optimizers()
+    model_path = os.path.join(MODEL_PATH, args.model_name)
+    os.makedirs(model_path, exist_ok=True)
+    # If loaded from pretrained module first.
+    if args.from_ckpt > 0:
+        if args.from_model_name:
+            path = os.path.join(
+                MODEL_PATH, args.from_model_name, f'{args.from_ckpt}.pth')
+        else:
+            path = os.path.join(model_path, f'{args.from_ckpt}.pth')
+        autocot_model.load_state_dict(torch.load(path), strict=True)
+        print(f'Pretrained module loaded from {path}.')
+
+    log_path = os.path.join(model_path, 'log.txt')
+
+
+    trainer = pl.Trainer(
+        accelerator="gpu",
+        devices=1,
+        max_steps=args.n_iters
+    )
+    trainer.fit(
+        model=autocot_model,
+        train_dataloaders=train_data
     )
 

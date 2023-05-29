@@ -2,10 +2,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from .module.VQ import VQKeyState, VQ2Linear
-from .module.GPT import KeyNet, ActNet
+from module.VQ import VQKeyState, VQ2Linear
+from module.GPT import KeyNet, ActNet
 
 import pytorch_lightning as pl
+
+from torch.optim.lr_scheduler import LambdaLR, MultiStepLR
+from lr_scheduler import CosineAnnealingLRWarmup
 
 def mse_loss_with_weights(preds, targets, weights=None):
     losses = torch.mean((preds - targets) ** 2, -1)
@@ -44,9 +47,13 @@ class BaseConfig:
 
 
 class KeyNetConfig(BaseConfig):
-    def __init__(self, block_size, n_embd, n_head, model_type, attn_pdrop, resid_pdrop, embd_pdrop, max_timestep):
+    def __init__(self, block_size, n_layer, n_embd, n_head, model_type,
+                 attn_pdrop, resid_pdrop, embd_pdrop,
+                 max_timestep):
         super().__init__(block_size, n_embd, n_head, attn_pdrop, resid_pdrop)
+        self.n_layer = n_layer
         assert 'cot' not in model_type, 'KeyNet cannot process key states input'
+        self.len_key_states = 0
         if '+a' in model_type:
             self.block_size *= 2
         self.model_type = model_type
@@ -55,11 +62,10 @@ class KeyNetConfig(BaseConfig):
 
 
 class ActNetConfig(BaseConfig):
-    def __init__(
-        self, n_embd, n_head, attn_pdrop, resid_pdrop, block_size,
-        model_type, key_states
-    ):
-        super().__init__(n_embd, n_head, attn_pdrop, resid_pdrop, block_size)
+    def __init__(self, block_size, n_layer, n_embd, n_head, model_type,
+                 attn_pdrop, resid_pdrop, key_states):
+        super().__init__(block_size, n_embd, n_head, attn_pdrop, resid_pdrop)
+        self.n_layer = n_layer
         assert 'cot' in model_type, 'ActNet MUST have key states prompt input'
         self.model_type = model_type
         if '+a' in model_type:
@@ -69,7 +75,7 @@ class ActNetConfig(BaseConfig):
         # state x is used. e.g., here a,c,d is used while b is skipped.
         assert key_states not in ['', None] and \
                np.all([ord('z') >= ord(g) >= ord('a') for g in key_states])
-
+        self.key_states = key_states
         self.len_key_states = len(key_states)
 
 
@@ -82,12 +88,14 @@ class AutoCoT(pl.LightningModule):
         vq_legacy,
         act_config,
         optimizers_config,
+        scheduler_config,
         state_dim=-1,
         action_dim=-1
     ):
         super().__init__()
 
         self.optimizers_config = optimizers_config
+        self.scheduler_config = scheduler_config
 
         assert state_dim > 0 and action_dim > 0
 
@@ -152,7 +160,7 @@ class AutoCoT(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         # Forward pass
-        states, timesteps, actions, lengths = batch['s'], batch['t'], batch['a'], batch['lenghts']
+        states, timesteps, actions, lengths = batch['s'], batch['t'], batch['a'], batch['lengths']
         key_emb, x, T = self.encode(states, timesteps, actions)
         key_emb_out, emb_q_loss = self.book_neck(key_emb)
         act_preds = self.decode(key_emb_out, x, T, key_state_mask=None)
@@ -162,6 +170,15 @@ class AutoCoT(pl.LightningModule):
         loss_book_emb = emb_q_loss
 
         loss = loss_act_pred + loss_book_emb
+
+        self.log_dict(
+            {
+                "loss": loss,
+                "loss_act_pred": loss_act_pred,
+                "loss_book_emb": loss_book_emb
+            }, prog_bar=True
+        )
+
         return loss
 
     def configure_optimizers(self):
@@ -178,29 +195,32 @@ class AutoCoT(pl.LightningModule):
         whitelist_weight_modules = (torch.nn.Linear, torch.nn.Conv2d)
         blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
         for mn, m in self.named_modules():
+            # print("mn =", mn, 'm =', m)
             for pn, _ in m.named_parameters():
+                # print("pn =", pn)
                 fpn = '%s.%s' % (mn, pn) if mn else pn  # full param name
-                print(fpn)
+                # print(fpn)
 
                 if pn.endswith('bias'):
                     # all biases will not be decayed
-                    print('\tbias no decay')
+                    # print('\tbias no decay')
                     no_decay.add(fpn)
                 elif pn.endswith('weight') and isinstance(m, whitelist_weight_modules):
                     # weights of whitelist modules will be weight decayed
-                    print('\tweight in white list, decay')
+                    # print('\tweight in white list, decay')
                     decay.add(fpn)
                 elif pn.endswith('weight') and isinstance(m, blacklist_weight_modules):
                     # weights of blacklist modules will NOT be weight decayed
-                    print('\tweight in black list, no decay')
+                    # print('\tweight in black list, no decay')
                     no_decay.add(fpn)
+
 
         # special case the position embedding parameter in the root GPT module as not decayed
         # NEED MODIFICATION
-        no_decay.add('local_pos_emb')
-        no_decay.add('global_pos_emb')
-        if 'cot' in self.model_type:
-            no_decay.add('key_state_pos_emb')
+        no_decay.add('key_net.local_pos_emb')
+        no_decay.add('key_net.global_pos_emb')
+        # if 'cot' in self.model_type:
+        #     no_decay.add('key_state_pos_emb')
 
         # validate that we considered every parameter
         param_dict = {pn: p for pn, p in self.named_parameters()}
@@ -224,4 +244,24 @@ class AutoCoT(pl.LightningModule):
             lr=self.optimizers_config['init_lr'],
             betas=(self.optimizers_config['beta1'], self.optimizers_config['beta2'])
         )
-        return optimizer
+        # scheduler config
+        if self.scheduler_config is None:
+            return optimizer
+
+        assert 'type' in self.scheduler_config.keys()
+        if self.scheduler_config['type'] == 'cos_decay_with_warmup':
+            assert 't_max', 't_warmup' in self.scheduler_config.keys()
+            scheduler = CosineAnnealingLRWarmup(
+                optimizer,
+                T_max=self.scheduler_config['t_max'],
+                T_warmup=self.scheduler_config['t_warmup']
+            )
+        elif self.scheduler_config['type'] == 'multistep':
+            assert 'milestones', 'gamma' in self.scheduler_config.keys()
+            scheduler = torch.optim.lr_scheduler.MultiStepLR(
+                optimizer,
+                milestones=self.scheduler_config['milestones'],
+                gamma=self.scheduler_config['gamma']
+            )
+
+        return [optimizer], [scheduler]

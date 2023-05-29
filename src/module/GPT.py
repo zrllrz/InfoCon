@@ -242,6 +242,7 @@ class KeyNet(nn.Module):
         if '+a' in self.model_type:
             self.action_encoder = MLP(self.action_dim, config.n_embd, hidden_dims=[256])
 
+        self.ln = nn.LayerNorm(config.n_embd)
         # Do not need predictor...
         self.apply(self._init_weights)
         print(f"Total # of parameters: {sum(p.numel() for p in self.parameters())}")
@@ -373,11 +374,8 @@ class ActNet(nn.Module):
         assert 'cot' in config.model_type
         self.model_type = config.model_type
         self.key_states = config.key_states
-        self.key_state_loss = config.key_state_loss
         self.len_key_states = config.len_key_states
         self.block_size = config.block_size
-
-        self.drop = nn.Dropout(config.embd_pdrop)
 
         # We must have cot!!!
         # We do not need key_state_pos_emb for our output from keynet is trying to do it
