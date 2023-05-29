@@ -18,7 +18,7 @@ from lr_scheduler import CosineAnnealingLRWarmup
 
 from path import MODEL_PATH
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
 '''
 Parsing Commandline Input
@@ -50,17 +50,19 @@ def parse_args():
                         help="Model type for the KeyNet module")
     parser.add_argument("--n_key_layer", default=3, type=int,
                         help="Number of attention layers in KeyNet")
-    parser.add_argument('--len_book', type=int, default=10,
+    parser.add_argument('--vq_len', type=int, default=100,
                         help="Length of the Key States Codebook")
     parser.add_argument('--vq_beta', type=str, default='2.0',
                         help="Coefficient in the VQ loss")
     parser.add_argument('--vq_legacy', type=bool, default=False,
                         help="Place that add vq_beta, should always be False")
+    parser.add_argument('--vq_log', type=bool, default=True,
+                        help="log variation of indices choice")
     parser.add_argument('--actnet_type', type=str, default='s+a+cot',
                         help="Model type for the ActNet module")
     parser.add_argument("--n_act_layer", default=1, type=int,
                         help="Number of attention layers in ActNet")
-    parser.add_argument('--key_states', type=str, default='a',
+    parser.add_argument('--key_states', type=str, default='abc',
                         help="Which key states to use (see GPTConfig for the spec. format).")
 
     # General hyper-parameters regarding module loading and saving
@@ -69,13 +71,13 @@ def parse_args():
     parser.add_argument("--from_ckpt", default=-1, type=int, help="Ckpt of pretrained module.")
 
     # Hyper-parameters regarding the demo dataset
-    parser.add_argument('--task', type=str, default='PickCube-v0', help="Task (env-id) in ManiSkill2.")
+    parser.add_argument('--task', type=str, default='PegInsertionSide-v0', help="Task (env-id) in ManiSkill2.")
     parser.add_argument('--control_mode', type=str, default='pd_joint_delta_pos',
                         help="Control mode used in envs from ManiSkill2.")
     parser.add_argument('--obs_mode', type=str, default='state',
                         help="State mode used in envs from ManiSkill2.")
     parser.add_argument("--seed", default=0, type=int, help="Random seed for data spliting.")
-    parser.add_argument("--num_traj", default=1, type=int, help="Number of training trajectories.")
+    parser.add_argument("--num_traj", default=500, type=int, help="Number of training trajectories.")
     parser.add_argument('--context_length', type=int, default=60,
                         help="Context size of CoTPC (the maximium length of sequences " +
                              "sampled from demo trajectories in training).")
@@ -89,7 +91,7 @@ def parse_args():
     # For faster data loader.
     parser.add_argument("--num_workers", default=5, type=int,
                         help="A positive number for fast async data loading.")
-    parser.add_argument('--multiplier', type=int, default=10000,
+    parser.add_argument('--multiplier', type=int, default=52,
                         help="Duplicate the dataset to reduce data loader overhead.")
 
     return parser.parse_args()
@@ -170,9 +172,10 @@ if __name__ == "__main__":
 
     autocot_model = AutoCoT(
         key_config=key_config,
-        len_book=args.len_book,
+        vq_len=args.vq_len,
         vq_beta=float(args.vq_beta),
         vq_legacy=args.vq_legacy,
+        vq_log=args.vq_log,
         act_config=act_config,
         optimizers_config=optimizer_config,
         scheduler_config=scheduler_config,

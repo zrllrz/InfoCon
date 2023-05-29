@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from module.VQ import VQKeyState, VQ2Linear
+from module.VQ import VQ2Linear
 from module.GPT import KeyNet, ActNet
 
 import pytorch_lightning as pl
@@ -83,9 +83,10 @@ class AutoCoT(pl.LightningModule):
     def __init__(
         self,
         key_config,
-        len_book,
+        vq_len,
         vq_beta,
         vq_legacy,
+        vq_log,
         act_config,
         optimizers_config,
         scheduler_config,
@@ -108,10 +109,11 @@ class AutoCoT(pl.LightningModule):
         )
 
         self.key_states_book = VQ2Linear(
-            n_e=len_book,
+            n_e=vq_len,
             e_dim=key_config.n_embd,
             beta=vq_beta,
-            legacy=vq_legacy
+            legacy=vq_legacy,
+            log_choice=vq_log
         )
 
         self.len_key_states = act_config.len_key_states  # len of prompt for the Act-Net
@@ -139,9 +141,9 @@ class AutoCoT(pl.LightningModule):
         return key_emb, x, T
 
     def book_neck(self, key_emb):
-        key_emb_q, emb_q_loss = self.key_states_book(key_emb)
+        key_emb_q, emb_q_loss, indices, v = self.key_states_book(key_emb)
         key_emb_out = (self.book_out(key_emb_q)).view(-1, self.len_key_states, self.n_embd)
-        return key_emb_out, emb_q_loss
+        return key_emb_out, emb_q_loss, indices, v
 
     def decode(self, key_emb_out, x, T, key_state_mask=None):
         act_preds = self.act_net(key_emb_out, x, T, key_state_mask=key_state_mask)
@@ -154,7 +156,7 @@ class AutoCoT(pl.LightningModule):
     # key_state_mask:
     def forward(self, states, timesteps, actions=None, key_state_mask=None):
         key_emb, x, T = self.encode(states, timesteps, actions)
-        key_emb_out, emb_q_loss = self.book_neck(key_emb)
+        key_emb_out, emb_q_loss, _, v = self.book_neck(key_emb)
         act_preds = self.decode(key_emb_out, x, T, key_state_mask=key_state_mask)
         return act_preds, emb_q_loss
 
@@ -162,7 +164,7 @@ class AutoCoT(pl.LightningModule):
         # Forward pass
         states, timesteps, actions, lengths = batch['s'], batch['t'], batch['a'], batch['lengths']
         key_emb, x, T = self.encode(states, timesteps, actions)
-        key_emb_out, emb_q_loss = self.book_neck(key_emb)
+        key_emb_out, emb_q_loss, _, v = self.book_neck(key_emb)
         act_preds = self.decode(key_emb_out, x, T, key_state_mask=None)
 
         # Obtain training losses
@@ -176,8 +178,10 @@ class AutoCoT(pl.LightningModule):
                 "loss": loss,
                 "loss_act_pred": loss_act_pred,
                 "loss_book_emb": loss_book_emb
-            }, prog_bar=True
+            }, prog_bar=True, on_step=True, on_epoch=True
         )
+        if v is not None:
+            self.log("choice_var", v, prog_bar=True, on_step=True, on_epoch=True)
 
         return loss
 
