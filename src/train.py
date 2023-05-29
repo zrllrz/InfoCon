@@ -52,7 +52,7 @@ def parse_args():
                         help="Number of attention layers in KeyNet")
     parser.add_argument('--vq_len', type=int, default=100,
                         help="Length of the Key States Codebook")
-    parser.add_argument('--vq_beta', type=str, default='2.0',
+    parser.add_argument('--vq_beta', type=str, default='0.2',
                         help="Coefficient in the VQ loss")
     parser.add_argument('--vq_legacy', type=bool, default=False,
                         help="Place that add vq_beta, should always be False")
