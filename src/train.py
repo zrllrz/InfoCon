@@ -15,10 +15,12 @@ from autocot import (
     AutoCoT,
 )
 from lr_scheduler import CosineAnnealingLRWarmup
+from pytorch_lightning.callbacks import ModelCheckpoint
+from callbacks import MySaveLogger
 
 from path import MODEL_PATH
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 '''
 Parsing Commandline Input
@@ -198,14 +200,25 @@ if __name__ == "__main__":
 
     log_path = os.path.join(model_path, 'log.txt')
 
+    # modelcheckpoint = ModelCheckpoint(
+    #     dirpath=model_path,
+    #     save_last=True,
+    #     every_n_train_steps=args.save_every
+    # )
+    mysavelogger = MySaveLogger(
+        path=model_path,
+        args=args,
+        epoch_frequency=2000
+    )
 
     trainer = pl.Trainer(
         accelerator="gpu",
         devices=1,
-        max_steps=args.n_iters
+        callbacks=[mysavelogger],
+        max_steps=args.n_iters,
     )
     trainer.fit(
         model=autocot_model,
-        train_dataloaders=train_data
+        train_dataloaders=train_data,
     )
 

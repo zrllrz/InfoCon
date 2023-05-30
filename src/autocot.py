@@ -88,8 +88,8 @@ class AutoCoT(pl.LightningModule):
         vq_legacy,
         vq_log,
         act_config,
-        optimizers_config,
-        scheduler_config,
+        optimizers_config=None,
+        scheduler_config=None,
         state_dim=-1,
         action_dim=-1
     ):
@@ -243,11 +243,18 @@ class AutoCoT(pl.LightningModule):
             {"params": [param_dict[pn] for pn in sorted(list(no_decay))],
              "weight_decay": 0.0},
         ]
-        optimizer = torch.optim.AdamW(
-            optim_groups,
-            lr=self.optimizers_config['init_lr'],
-            betas=(self.optimizers_config['beta1'], self.optimizers_config['beta2'])
-        )
+        if self.optimizers_config is not None:
+            optimizer = torch.optim.AdamW(
+                optim_groups,
+                lr=self.optimizers_config['init_lr'],
+                betas=(self.optimizers_config['beta1'], self.optimizers_config['beta2'])
+            )
+        else:
+            optimizer = torch.optim.AdamW(
+                optim_groups,
+                lr=1e-4,
+                betas=(0.9, 0.95)
+            )
         # scheduler config
         if self.scheduler_config is None:
             return optimizer
