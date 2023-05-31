@@ -192,7 +192,8 @@ if __name__ == "__main__":
             
             # Update metrics.
             for i, info in enumerate(infos):
-                j = start_idx + i   
+                j = start_idx + i
+                '''
                 # You might want to use these additional metrics.         
                 if args.task == 'PickCube-v0':
                     metric_dict['is_grasped'][j].append(info['is_grasped'])
@@ -208,6 +209,7 @@ if __name__ == "__main__":
                     metric_dict['close_to_target'][j].append(info['chair_close_to_target'])
                     metric_dict['static_at_last'][j].append(
                         info['chair_close_to_target'] and info['chair_static'])
+                '''
                 metric_dict['success'][j].append(info['success'])
 
     for k, v in metric_dict.items():

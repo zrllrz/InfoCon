@@ -86,8 +86,10 @@ class AutoCoT(pl.LightningModule):
         vq_len,
         vq_beta,
         vq_legacy,
-        vq_log,
         act_config,
+        vq_log=True,
+        vq_kmeans_reset=None,
+        vq_kmeans_step=None,
         optimizers_config=None,
         scheduler_config=None,
         state_dim=-1,
@@ -115,9 +117,7 @@ class AutoCoT(pl.LightningModule):
             legacy=vq_legacy,
             log_choice=vq_log
         )
-
         self.len_key_states = act_config.len_key_states  # len of prompt for the Act-Net
-
         self.book_out = nn.Sequential(
             nn.Linear(
                 act_config.n_embd,
@@ -129,6 +129,16 @@ class AutoCoT(pl.LightningModule):
                 act_config.n_embd * act_config.len_key_states
             )
         )
+        if vq_kmeans_reset is not None:
+            assert isinstance(vq_kmeans_reset, int)
+            assert isinstance(vq_kmeans_step, int)
+            self.kmeans_idx = 0
+            self.vq_kmeans_reset = vq_kmeans_reset
+            self.vq_kmeans_step = vq_kmeans_step
+        else:
+            self.kmeans_idx = None
+            self.vq_kmeans_reset = None
+            self.vq_kmeans_step = None
 
         self.act_net = ActNet(
             config=act_config,
@@ -184,6 +194,30 @@ class AutoCoT(pl.LightningModule):
             self.log("choice_var", v, prog_bar=True, on_step=True, on_epoch=True)
 
         return loss
+
+    @torch.no_grad()
+    def on_train_batch_start(self, batch, batch_idx):
+        # print(self.kmeans_idx)
+        if self.vq_kmeans_reset is not None:
+            if self.kmeans_idx % self.vq_kmeans_reset == 0:
+                print('Resetting Key Book using K-Means')
+                arranged_mask = torch.arange(self.key_states_book.n_e)[:, None]
+                arranged_mask = arranged_mask.to(self.device)
+                states, timesteps, actions = batch['s'], batch['t'], batch['a']
+                key_emb, _, _ = self.encode(states, timesteps, actions)
+
+                # Do kmeans algorithm to reset
+                for _ in range(self.vq_kmeans_step):
+                    _, _, indices, _ = self.book_neck(key_emb)
+                    expanded_indices = indices[None].expand(self.key_states_book.n_e, -1)
+                    mask = (expanded_indices == arranged_mask).to(key_emb.dtype)
+                    c_grad = mask @ key_emb / mask.sum(-1)[..., :, None]
+                    torch.nan_to_num_(c_grad)
+                    # print(self.key_states_book.embedding.weight)
+
+                    self.key_states_book.embedding.weight.data = c_grad
+
+            self.kmeans_idx += 1
 
     def configure_optimizers(self):
         """

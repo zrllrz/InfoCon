@@ -60,6 +60,10 @@ def parse_args():
                         help="Place that add vq_beta, should always be False")
     parser.add_argument('--vq_log', type=bool, default=True,
                         help="log variation of indices choice")
+    parser.add_argument('--vq_kmeans_reset', type=int, default=10,
+                        help="steps interval of resetting embedding using k-means")
+    parser.add_argument('--vq_kmeans_step', type=int, default=10,
+                        help="interation steps of k-means")
     parser.add_argument('--actnet_type', type=str, default='s+a+cot',
                         help="Model type for the ActNet module")
     parser.add_argument("--n_act_layer", default=1, type=int,
@@ -178,6 +182,8 @@ if __name__ == "__main__":
         vq_beta=float(args.vq_beta),
         vq_legacy=args.vq_legacy,
         vq_log=args.vq_log,
+        vq_kmeans_reset=args.vq_kmeans_reset,
+        vq_kmeans_step=args.vq_kmeans_step,
         act_config=act_config,
         optimizers_config=optimizer_config,
         scheduler_config=scheduler_config,
