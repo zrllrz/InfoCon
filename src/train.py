@@ -20,8 +20,6 @@ from callbacks import MySaveLogger
 
 from path import MODEL_PATH
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-
 '''
 Parsing Commandline Input
 '''
@@ -60,9 +58,9 @@ def parse_args():
                         help="Place that add vq_beta, should always be False")
     parser.add_argument('--vq_log', type=bool, default=True,
                         help="log variation of indices choice")
-    parser.add_argument('--vq_kmeans_reset', type=int, default=10,
+    parser.add_argument('--vq_kmeans_reset', type=int, default=1000,
                         help="steps interval of resetting embedding using k-means")
-    parser.add_argument('--vq_kmeans_step', type=int, default=10,
+    parser.add_argument('--vq_kmeans_step', type=int, default=100,
                         help="interation steps of k-means")
     parser.add_argument('--actnet_type', type=str, default='s+a+cot',
                         help="Model type for the ActNet module")
@@ -83,7 +81,7 @@ def parse_args():
     parser.add_argument('--obs_mode', type=str, default='state',
                         help="State mode used in envs from ManiSkill2.")
     parser.add_argument("--seed", default=0, type=int, help="Random seed for data spliting.")
-    parser.add_argument("--num_traj", default=500, type=int, help="Number of training trajectories.")
+    parser.add_argument("--num_traj", default=-1, type=int, help="Number of training trajectories.")
     parser.add_argument('--context_length', type=int, default=60,
                         help="Context size of CoTPC (the maximium length of sequences " +
                              "sampled from demo trajectories in training).")

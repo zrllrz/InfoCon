@@ -109,7 +109,6 @@ class AutoCoT(pl.LightningModule):
             state_dim=state_dim,
             action_dim=action_dim
         )
-
         self.key_states_book = VQ2Linear(
             n_e=vq_len,
             e_dim=key_config.n_embd,

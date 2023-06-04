@@ -115,7 +115,8 @@ if __name__ == "__main__":
 
     # Load demos to fetch the env. seeds used in training.
     json_path = os.path.join(
-        DATA_PATH, f'{args.task}/trajectory.{args.obs_mode}.{args.control_mode}.json')
+        DATA_PATH,
+        f'{args.task}/trajectory.{args.obs_mode}.{args.control_mode}.json')
     json_data = load_json(json_path)
     env_kwargs = json_data["env_info"]["env_kwargs"]
     env_kwargs["obs_mode"] = args.obs_mode

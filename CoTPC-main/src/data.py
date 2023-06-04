@@ -106,7 +106,7 @@ class MS2Demos(Dataset):
             ids = []
             for i in range(10):  # Hard-code the 10 data splits for permutation.
                 t_ids = np.random.permutation(len(traj_all)//10)[:length//10]
-                t_ids += i*len(traj_all)//10
+                t_ids += i * len(traj_all) // 10
                 ids.append(t_ids)
             ids = np.concatenate(ids)
         # Since PushChair uses 5 different faucet models, we shuffle the data
