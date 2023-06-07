@@ -38,6 +38,10 @@ def predict(model, action_hist, state_hist, t):
         actions = torch.stack(action_hist, 1).float().cuda()
     states = torch.stack(state_hist, 1).float().cuda()
 
+    print('preprocess states, actions, timesteps:', states, actions, timesteps)
+    print('their shape:', states.shape, timesteps.shape)
+    input()
+
     if 'cot' in model.model_type:
         # T is the max sequence size; S is the current number of steps.
         B, T = states.shape[0], model.block_size + model.len_key_states
@@ -144,7 +148,7 @@ if __name__ == "__main__":
         eval_ids = np.random.permutation(
             len(json_data["episodes"]))[:params['num_traj']][:500]
         
-    n_env = 25  # Number of parallel environments.
+    n_env = 1  # 25 Number of parallel environments.
     assert len(eval_ids) % n_env == 0, f'indivisible {len(eval_ids)}, {n_env}'
     envs = get_mp_envs(args.task, n_env, **env_kwargs)
 
@@ -181,6 +185,7 @@ if __name__ == "__main__":
 
         s = torch.from_numpy(envs.reset(reset_args_list)).float()
         state_hist, action_hist, t = [s], [], np.zeros([n_env])
+        print('init state_hist, action_hist, t:', state_hist, action_hist, t)
 
         for step in range(args.eval_max_steps):
             a = predict(model, action_hist, state_hist, t).cpu().numpy()
@@ -190,6 +195,8 @@ if __name__ == "__main__":
             
             action_hist, state_hist, t = update(
                 model, action_hist, state_hist, a, s, t)
+
+            print('update t to', t)
             
             # Update metrics.
             for i, info in enumerate(infos):
@@ -260,6 +267,9 @@ if __name__ == "__main__":
 
         s = torch.from_numpy(envs.reset(reset_args_list)).float()
         state_hist, action_hist, t = [s], [], np.zeros([n_env])
+
+        print('init state_hist, action_hist, t:', state_hist, action_hist, t)
+        input()
 
         for step in range(args.eval_max_steps):
             a = predict(model, action_hist, state_hist, t).cpu().numpy()

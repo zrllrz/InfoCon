@@ -22,36 +22,21 @@ from path import MODEL_PATH, DATA_PATH
 @torch.no_grad()
 def predict(model, action_hist, state_hist, t):
 
-    timesteps = torch.from_numpy(t)[:, None].cuda()
+    timesteps = torch.from_numpy(t)[:, None].to(model.device)
     if not action_hist:  # The first step.
         actions = None
     else:
         actions = torch.stack(action_hist, 1).float().to(model.device)
     states = torch.stack(state_hist, 1).float().to(model.device)
 
-    # print('actions device:', actions.device)
-    # print('states device:', states.device)
-    # print('model device:', model.device)
+    # print('preprocess states, actions, timesteps:', states, actions, timesteps)
+    # print('their shape:', states.shape, timesteps.shape)
 
-    # must have cot in act net, but config param should change
-    # T is the max sequence size; S is the current number of steps.
-    B, T = states.shape[0], model.key_net.block_size + model.act_net.len_key_states
-    n_head, S = model.act_net.config.n_head, states.shape[1] - 1  # Exclude the init state.
+    # label key states
+    key_emb, _, _ = model.encode(states=states, timesteps=timesteps, actions=actions)
+    _, _, indices, _ = model.book_neck(key_emb)
 
-    # Masks for the all-to-all key state query tokens in attention layers.
-    # The built-in masks for causal (auto-regressive) tokens are in `module.py`.
-    key_state_mask = torch.zeros([B, n_head, T, T], dtype=torch.bool)
-    m1 = torch.arange(0, T).repeat(B, 1)
-    m2 = torch.ones([B, 1]) * (S * 2 + model.act_net.len_key_states)
-    m3 = m1 > m2  # Tokens in the future are masked out.
-    m3 = m3[:, None, None, :].repeat(1, n_head, model.act_net.len_key_states, 1)
-    key_state_mask[:, :, :model.len_key_states, :] = m3
-    key_state_mask = key_state_mask.cuda()
-
-    # predict action
-    preds, _ = model(states, timesteps, actions=actions, key_state_mask=key_state_mask)
-
-    return preds[:, -1]
+    return indices
 
 
 def update(model, action_hist, state_hist, actions, states, t):
@@ -204,101 +189,81 @@ if __name__ == "__main__":
             for step_idx in range(dataset['env_states'][idx].shape[0]):
                 dataset['key_label'][idx][step_idx].append('end')
 
-    # print(dataset['key_label'][0], type(dataset['key_label'][0]))
-
-    for l in dataset['key_label'][0]:
-        print(l)
-    #     for i in l:
-    #         print(i)
-
     # config our net
-    # key_config = KeyNetConfig(
-    #     block_size=params['context_length'],
-    #     n_layer=params['n_key_layer'],
-    #     n_embd=params['n_embd'],
-    #     n_head=params['n_head'],
-    #     model_type=params['keynet_type'],
-    #     attn_pdrop=float(params['dropout']),
-    #     resid_pdrop=float(params['dropout']),
-    #     embd_pdrop=float(params['dropout']),
-    #     max_timestep=max_timestep,
-    # )
-    # act_config = ActNetConfig(
-    #     block_size=params['context_length'],
-    #     n_layer=params['n_act_layer'],
-    #     n_embd=params['n_embd'],
-    #     n_head=params['n_head'],
-    #     model_type=params['actnet_type'],
-    #     attn_pdrop=float(params['dropout']),
-    #     resid_pdrop=float(params['dropout']),
-    #     key_states=params['key_states']
-    # )
-    # autocot_model = AutoCoT(
-    #     key_config=key_config,
-    #     vq_len=params['vq_len'],
-    #     vq_beta=float(params['vq_beta']),
-    #     vq_legacy=params['vq_legacy'],
-    #     vq_log=params['vq_log'],
-    #     act_config=act_config,
-    #     optimizers_config=None,
-    #     scheduler_config=None,
-    #     state_dim=state_dim,
-    #     action_dim=action_dim
-    # )
-    # autocot_model = autocot_model.cuda()
-    # autocot_model.load_state_dict(state_dict_from_ckpt, strict=False)
-    # autocot_model.eval()
-    #
-    # output_str, output_dict = '', dict()
-    #
-    # metric_dict = defaultdict(lambda: [[] for _ in range(len(eval_ids))])
-    # for start_idx in tqdm(range(0, len(eval_ids), n_env)):
-    #     reset_args_list = []
-    #     for i in range(start_idx, min(start_idx + n_env, len(eval_ids))):
-    #         reset_kwargs = json_data["episodes"][eval_ids[i]]['reset_kwargs']
-    #         reset_args_list.append(reset_kwargs)
-    #
-    #     s = torch.from_numpy(envs.reset(reset_args_list)).float()
-    #     state_hist, action_hist, t = [s], [], np.zeros([n_env])
-    #
-    #     for step in range(args.eval_max_steps):
-    #         a = predict(autocot_model, action_hist, state_hist, t).cpu().numpy()
-    #
-    #         s, _, _, infos = envs.step(a)
-    #         s = torch.from_numpy(s).float()
-    #
-    #         action_hist, state_hist, t = update(
-    #             autocot_model, action_hist, state_hist, a, s, t)
-    #
-    #         # Update metrics.
-    #
-    #         for i, info in enumerate(infos):
-    #             j = start_idx + i
-    #             # print(info.keys())
-    #             # You might want to use these additional metrics.
-    #             '''
-    #             if args.task == 'PickCube-v0':
-    #                 metric_dict['is_grasped'][j].append(info['is_grasped'])
-    #             if args.task == 'StackCube-v0':
-    #                 metric_dict['is_cubaA_grasped'][j].append(info['is_cubaA_grasped'])
-    #                 metric_dict['is_cubeA_on_cubeB'][j].append(info['is_cubeA_on_cubeB'])
-    #             if args.task == 'PegInsertionSide-v0':
-    #                 metric_dict['is_grasped'][j].append(info['is_grasped'])
-    #                 metric_dict['pre_inserted'][j].append(info['pre_inserted'])
-    #             if args.task == 'TurnFaucet-v0':
-    #                 metric_dict['is_contacted'][j].append(info['is_contacted'])
-    #             if args.task == 'PushChair-v1':
-    #                 metric_dict['close_to_target'][j].append(info['chair_close_to_target'])
-    #                 metric_dict['static_at_last'][j].append(
-    #                     info['chair_close_to_target'] and info['chair_static'])
-    #             '''
-    #             metric_dict['success'][j].append(info['success'])
-    #
-    # for k, v in metric_dict.items():
-    #     v = np.mean([np.any(vv) for vv in v]) * 100
-    #     output_str += f'{k} {v:.2f}, '
-    #     output_dict[k] = v
-    # output_str = output_str[:-2]
-    # print(output_str)
+    key_config = KeyNetConfig(
+        block_size=params['context_length'],
+        n_layer=params['n_key_layer'],
+        n_embd=params['n_embd'],
+        n_head=params['n_head'],
+        model_type=params['keynet_type'],
+        attn_pdrop=float(params['dropout']),
+        resid_pdrop=float(params['dropout']),
+        embd_pdrop=float(params['dropout']),
+        max_timestep=max_timestep,
+    )
+    act_config = ActNetConfig(
+        block_size=params['context_length'],
+        n_layer=params['n_act_layer'],
+        n_embd=params['n_embd'],
+        n_head=params['n_head'],
+        model_type=params['actnet_type'],
+        attn_pdrop=float(params['dropout']),
+        resid_pdrop=float(params['dropout']),
+        key_states=params['key_states']
+    )
+    autocot_model = AutoCoT(
+        key_config=key_config,
+        vq_len=params['vq_len'],
+        vq_beta=float(params['vq_beta']),
+        vq_legacy=params['vq_legacy'],
+        vq_log=params['vq_log'],
+        act_config=act_config,
+        optimizers_config=None,
+        scheduler_config=None,
+        state_dim=state_dim,
+        action_dim=action_dim
+    )
+    autocot_model = autocot_model.cuda()
+    autocot_model.load_state_dict(state_dict_from_ckpt, strict=False)
+    autocot_model.eval()
+
+
+    # print(length)
+    # print(len(dataset['key_label']))
+    # print(len(dataset['env_states']))
+    # print(len(dataset['obs']))
+    # print(len(dataset['actions']))
+
+    for i_traj in range(length):
+        traj_state = dataset['obs'][i_traj]
+        traj_action = dataset['actions'][i_traj]
+        traj_label = dataset['key_label'][i_traj]
+        # print(traj_state.shape)
+        # print(traj_action.shape)
+
+        t = np.zeros(shape=[1])
+        state_hist, action_hist = [torch.from_numpy(traj_state[:1]).float()], []
+
+        # print('init state_hist, action_hist, t:', state_hist, action_hist, t)
+
+        for step in range(traj_action.shape[0]):
+            indices = predict(
+                model=autocot_model,
+                action_hist=action_hist,
+                state_hist=state_hist,
+                t=t
+            )
+            print(indices, traj_label[step])
+
+            # update...
+            if len(state_hist) == autocot_model.key_net.block_size // 2:
+                assert len(action_hist) == autocot_model.key_net.block_size // 2 - 1
+                state_hist = state_hist[1:] + [torch.from_numpy(traj_state[step + 1:step + 2]).float()]
+                action_hist = action_hist[1:] + [torch.from_numpy(traj_action[step: step + 1]).float()]
+                t += 1
+            else:
+                state_hist.append(torch.from_numpy(traj_state[step + 1:step + 2]).float())
+                action_hist.append(torch.from_numpy(traj_action[step: step + 1]).float())
+        input()
 
 

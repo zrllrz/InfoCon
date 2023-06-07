@@ -21,12 +21,16 @@ from path import MODEL_PATH, DATA_PATH
 @torch.no_grad()
 def predict(model, action_hist, state_hist, t):
 
-    timesteps = torch.from_numpy(t)[:, None].cuda()
+    timesteps = torch.from_numpy(t)[:, None].to(model.device)
     if not action_hist:  # The first step.
         actions = None
     else:
         actions = torch.stack(action_hist, 1).float().to(model.device)
     states = torch.stack(state_hist, 1).float().to(model.device)
+
+    print('preprocess states, actions, timesteps:', states, actions, timesteps)
+    print('their shape:', states.shape, actions.shape, timesteps.shape)
+    input()
 
     # print('actions device:', actions.device)
     # print('states device:', states.device)
@@ -186,6 +190,9 @@ if __name__ == "__main__":
 
         s = torch.from_numpy(envs.reset(reset_args_list)).float()
         state_hist, action_hist, t = [s], [], np.zeros([n_env])
+
+        print('init state_hist, action_hist, t:', state_hist, action_hist, t)
+        input()
 
         for step in range(args.eval_max_steps):
             a = predict(autocot_model, action_hist, state_hist, t).cpu().numpy()
