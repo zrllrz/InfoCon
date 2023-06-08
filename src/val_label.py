@@ -142,7 +142,7 @@ if __name__ == "__main__":
     print(dataset['env_states'][0].shape[0])
 
     dataset['key_label'] = [
-        [[] for j in range(dataset['env_states'][idx].shape[0])] for idx in range(length)
+        [None for j in range(dataset['env_states'][idx].shape[0])] for idx in range(length)
     ]
     print(dataset['key_label'][0])
 
@@ -168,8 +168,12 @@ if __name__ == "__main__":
             # print(f'traj_{idx}')
             for step_idx, key in enumerate(dataset['infos/is_contacted'][idx]):
                 # print(f'{step_idx}\t{key}')
-                dataset['key_label'][idx][step_idx].append('is_contacted')
+                if dataset['key_label'][idx][step_idx] is None:
+                    dataset['key_label'][idx][step_idx] = 'is_contacted'
                 if key: break
+            for step_idx in range(dataset['env_states'][idx].shape[0]):
+                if dataset['key_label'][idx][step_idx] is None:
+                    dataset['key_label'][idx][step_idx] = 'end'
 
     # If PegInsertion (three key states)
     # key state I: is_grasped -> true
@@ -180,14 +184,17 @@ if __name__ == "__main__":
             # print(f'traj_{idx}')
             for step_idx, key in enumerate(dataset['infos/is_grasped'][idx]):
                 # print(f'{step_idx}\t{key}')
-                dataset['key_label'][idx][step_idx].append('is_grasped')
+                if dataset['key_label'][idx][step_idx] is None:
+                    dataset['key_label'][idx][step_idx] = 'is_grasped'
                 if key: break
             for step_idx, key in enumerate(dataset['infos/pre_inserted'][idx]):
                 # print(f'{step_idx}\t{key}')
-                dataset['key_label'][idx][step_idx].append('pre_inserted')
+                if dataset['key_label'][idx][step_idx] is None:
+                    dataset['key_label'][idx][step_idx] = 'pre_inserted'
                 if key: break
             for step_idx in range(dataset['env_states'][idx].shape[0]):
-                dataset['key_label'][idx][step_idx].append('end')
+                if dataset['key_label'][idx][step_idx] is None:
+                    dataset['key_label'][idx][step_idx] = 'end'
 
     # config our net
     key_config = KeyNetConfig(
@@ -226,13 +233,6 @@ if __name__ == "__main__":
     autocot_model = autocot_model.cuda()
     autocot_model.load_state_dict(state_dict_from_ckpt, strict=False)
     autocot_model.eval()
-
-
-    # print(length)
-    # print(len(dataset['key_label']))
-    # print(len(dataset['env_states']))
-    # print(len(dataset['obs']))
-    # print(len(dataset['actions']))
 
     for i_traj in range(length):
         traj_state = dataset['obs'][i_traj]
