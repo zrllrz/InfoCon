@@ -16,7 +16,6 @@ class VQ2Linear(nn.Module):
         self.e_dim = e_dim
 
         self.beta = beta
-        print('in init of VQ2Linear', self.beta, type(self.beta))
         self.legacy = legacy
         self.log_choice = log_choice
 
@@ -36,9 +35,6 @@ class VQ2Linear(nn.Module):
 
         z_q = self.embedding(min_encoding_indices).view(z.shape)
 
-        perplexity = None
-        min_encodings = None
-
         # loss for embedding
         if not self.legacy:
             loss = self.beta * torch.mean((z_q.detach() - z) ** 2) + \
@@ -52,9 +48,6 @@ class VQ2Linear(nn.Module):
         z_q = z_q.contiguous()
 
         if self.log_choice is True:
-            # print('Try to log the time each indice has been selected')
-            # print('but it will drawback training efficiency')
-            # print('so we try to calculate variation instead')
             v = torch.var(min_encoding_indices.to(dtype=torch.float32))
             return z_q, loss, min_encoding_indices, v
         else:

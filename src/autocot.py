@@ -49,7 +49,7 @@ class BaseConfig:
 class KeyNetConfig(BaseConfig):
     def __init__(self, block_size, n_layer, n_embd, n_head, model_type,
                  attn_pdrop, resid_pdrop, embd_pdrop,
-                 max_timestep):
+                 max_timestep, use_skip_connection):
         super().__init__(block_size, n_embd, n_head, attn_pdrop, resid_pdrop)
         self.n_layer = n_layer
         assert 'cot' not in model_type, 'KeyNet cannot process key states input'
@@ -59,6 +59,7 @@ class KeyNetConfig(BaseConfig):
         self.model_type = model_type
         self.embd_pdrop = embd_pdrop
         self.max_timestep = max_timestep
+        self.use_skip_connection = use_skip_connection
 
 
 class ActNetConfig(BaseConfig):
@@ -146,16 +147,16 @@ class AutoCoT(pl.LightningModule):
         )
 
     def encode(self, states, timesteps, actions=None):
-        key_emb, x, T = self.key_net(states, timesteps, actions)
-        return key_emb, x, T
+        key_emb, x, T, int_feat = self.key_net(states, timesteps, actions)
+        return key_emb, x, T, int_feat
 
     def book_neck(self, key_emb):
         key_emb_q, emb_q_loss, indices, v = self.key_states_book(key_emb)
         key_emb_out = (self.book_out(key_emb_q)).view(-1, self.len_key_states, self.n_embd)
         return key_emb_out, emb_q_loss, indices, v
 
-    def decode(self, key_emb_out, x, T, key_state_mask=None):
-        act_preds = self.act_net(key_emb_out, x, T, key_state_mask=key_state_mask)
+    def decode(self, key_emb_out, x, T, int_feat, key_state_mask=None):
+        act_preds = self.act_net(key_emb_out, x, T, int_feat, key_state_mask=key_state_mask)
         return act_preds
 
     # states:    pure vec states (no key states)
@@ -164,17 +165,17 @@ class AutoCoT(pl.LightningModule):
     # actions:   pure vec action (no key action)
     # key_state_mask:
     def forward(self, states, timesteps, actions=None, key_state_mask=None):
-        key_emb, x, T = self.encode(states, timesteps, actions)
+        key_emb, x, T, int_feat = self.encode(states, timesteps, actions)
         key_emb_out, emb_q_loss, _, v = self.book_neck(key_emb)
-        act_preds = self.decode(key_emb_out, x, T, key_state_mask=key_state_mask)
+        act_preds = self.decode(key_emb_out, x, T, int_feat, key_state_mask=key_state_mask)
         return act_preds, emb_q_loss
 
     def training_step(self, batch, batch_idx):
         # Forward pass
         states, timesteps, actions, lengths = batch['s'], batch['t'], batch['a'], batch['lengths']
-        key_emb, x, T = self.encode(states, timesteps, actions)
+        key_emb, x, T, int_feat = self.encode(states, timesteps, actions)
         key_emb_out, emb_q_loss, _, v = self.book_neck(key_emb)
-        act_preds = self.decode(key_emb_out, x, T, key_state_mask=None)
+        act_preds = self.decode(key_emb_out, x, T, int_feat, key_state_mask=None)
 
         # Obtain training losses
         loss_act_pred = get_loss(act_preds, actions, lengths)
@@ -196,14 +197,13 @@ class AutoCoT(pl.LightningModule):
 
     @torch.no_grad()
     def on_train_batch_start(self, batch, batch_idx):
-        # print(self.kmeans_idx)
         if self.vq_kmeans_reset is not None:
             if self.kmeans_idx % self.vq_kmeans_reset == 0:
                 print('Resetting Key Book using K-Means')
                 arranged_mask = torch.arange(self.key_states_book.n_e)[:, None]
                 arranged_mask = arranged_mask.to(self.device)
                 states, timesteps, actions = batch['s'], batch['t'], batch['a']
-                key_emb, _, _ = self.encode(states, timesteps, actions)
+                key_emb, _, _, _ = self.encode(states, timesteps, actions)
 
                 # Do kmeans algorithm to reset
                 for _ in range(self.vq_kmeans_step):
@@ -212,7 +212,6 @@ class AutoCoT(pl.LightningModule):
                     mask = (expanded_indices == arranged_mask).to(key_emb.dtype)
                     c_grad = mask @ key_emb / mask.sum(-1)[..., :, None]
                     torch.nan_to_num_(c_grad)
-                    # print(self.key_states_book.embedding.weight)
 
                     self.key_states_book.embedding.weight.data = c_grad
 
@@ -232,23 +231,14 @@ class AutoCoT(pl.LightningModule):
         whitelist_weight_modules = (torch.nn.Linear, torch.nn.Conv2d)
         blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
         for mn, m in self.named_modules():
-            # print("mn =", mn, 'm =', m)
             for pn, _ in m.named_parameters():
-                # print("pn =", pn)
                 fpn = '%s.%s' % (mn, pn) if mn else pn  # full param name
-                # print(fpn)
 
                 if pn.endswith('bias'):
-                    # all biases will not be decayed
-                    # print('\tbias no decay')
                     no_decay.add(fpn)
                 elif pn.endswith('weight') and isinstance(m, whitelist_weight_modules):
-                    # weights of whitelist modules will be weight decayed
-                    # print('\tweight in white list, decay')
                     decay.add(fpn)
                 elif pn.endswith('weight') and isinstance(m, blacklist_weight_modules):
-                    # weights of blacklist modules will NOT be weight decayed
-                    # print('\tweight in black list, no decay')
                     no_decay.add(fpn)
 
 
@@ -256,8 +246,6 @@ class AutoCoT(pl.LightningModule):
         # NEED MODIFICATION
         no_decay.add('key_net.local_pos_emb')
         no_decay.add('key_net.global_pos_emb')
-        # if 'cot' in self.model_type:
-        #     no_decay.add('key_state_pos_emb')
 
         # validate that we considered every parameter
         param_dict = {pn: p for pn, p in self.named_parameters()}

@@ -26,7 +26,7 @@ Parsing Commandline Input
 def parse_args():
     parser = argparse.ArgumentParser()
     # Training hyper-parameters.
-    parser.add_argument("--n_iters", default=1_600_000, type=int, help="Number of training iterations.")
+    parser.add_argument("--n_iters", default=4_800_000, type=int, help="Number of training iterations.")
     parser.add_argument("--batch_size", default=256, type=int, help="Batch size.")
     parser.add_argument("--init_lr", default='5e-4', type=str, help="The initial learning rate.")
     parser.add_argument("--weight_decay", default='0', type=str, help="Weight decay coefficient.")
@@ -50,6 +50,8 @@ def parse_args():
                         help="Model type for the KeyNet module")
     parser.add_argument("--n_key_layer", default=3, type=int,
                         help="Number of attention layers in KeyNet")
+    parser.add_argument("--use_skip", default=False, type=bool,
+                        help="whether to use skip connection between KeyNet and ActNet or not")
     parser.add_argument('--vq_len', type=int, default=100,
                         help="Length of the Key States Codebook")
     parser.add_argument('--vq_beta', type=str, default='0.2',
@@ -64,7 +66,7 @@ def parse_args():
                         help="interation steps of k-means")
     parser.add_argument('--actnet_type', type=str, default='s+a+cot',
                         help="Model type for the ActNet module")
-    parser.add_argument("--n_act_layer", default=1, type=int,
+    parser.add_argument("--n_act_layer", default=3, type=int,
                         help="Number of attention layers in ActNet")
     parser.add_argument('--key_states', type=str, default='abc',
                         help="Which key states to use (see GPTConfig for the spec. format).")
@@ -141,6 +143,7 @@ if __name__ == "__main__":
         resid_pdrop=float(args.dropout),
         embd_pdrop=float(args.dropout),
         max_timestep=train_dataset.max_steps,
+        use_skip_connection=args.use_skip,
     )
     act_config = ActNetConfig(
         block_size=args.context_length,

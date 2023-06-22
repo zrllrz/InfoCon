@@ -33,7 +33,7 @@ def predict(model, action_hist, state_hist, t):
     # print('their shape:', states.shape, timesteps.shape)
 
     # label key states
-    key_emb, _, _ = model.encode(states=states, timesteps=timesteps, actions=actions)
+    key_emb, _, _, _ = model.encode(states=states, timesteps=timesteps, actions=actions)
     _, _, indices, _ = model.book_neck(key_emb)
 
     return indices
@@ -207,6 +207,7 @@ if __name__ == "__main__":
         resid_pdrop=float(params['dropout']),
         embd_pdrop=float(params['dropout']),
         max_timestep=max_timestep,
+        use_skip_connection=params['use_skip']
     )
     act_config = ActNetConfig(
         block_size=params['context_length'],
@@ -253,7 +254,7 @@ if __name__ == "__main__":
                 state_hist=state_hist,
                 t=t
             )
-            print(indices, traj_label[step])
+            print(indices.item(), traj_label[step])
 
             # update...
             if len(state_hist) == autocot_model.key_net.block_size // 2:

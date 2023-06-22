@@ -180,7 +180,7 @@ class BlocksWithCoT(nn.Module):
         self.n_head = config.n_head
         self.len_key_states = config.len_key_states
 
-    def forward(self, x, key_state_mask=None):
+    def forward(self, x, key_state_mask=None, intermediate_feats=None):
         B, T, _ = x.shape
 
         # During training the `key_state_mask` is not specified and we apply random
@@ -202,8 +202,23 @@ class BlocksWithCoT(nn.Module):
                 mask[:, None, None, :].repeat(1, self.n_head, self.len_key_states, 1)
 
         output = []  # Also keep the intermediate results.
-        for block in self.block_list:
-            x = block(x, key_state_mask=key_state_mask)
+
+        skip_begin = None
+        skip_end = None
+        use_skip = intermediate_feats is not None
+        if use_skip is True:
+            skip_begin = 1
+            skip_end = min(len(intermediate_feats) + 1, len(self.block_list))
+
+        i_int_feat = 0
+        for i_layer, block in enumerate(self.block_list):
+            if use_skip is True and skip_begin <= i_layer < skip_end:
+                x[:, -intermediate_feats[i_int_feat].shape[1]:, ...] \
+                    = x[:, -intermediate_feats[i_int_feat].shape[1]:, ...] + intermediate_feats[i_int_feat]
+                x = block(x, key_state_mask=key_state_mask)
+                i_int_feat += 1
+            else:
+                x = block(x, key_state_mask=key_state_mask)
             output.append(x)
 
         return x, output
@@ -221,6 +236,7 @@ class KeyNet(nn.Module):
         self.config = config
         self.state_dim = state_dim
         self.action_dim = action_dim
+        self.use_skip_connection = config.use_skip_connection
         self.model_type = config.model_type
         self.block_size = config.block_size
         assert 'cot' not in config.model_type, 'Again, we do not receive cot input in KeyNet'
@@ -245,7 +261,6 @@ class KeyNet(nn.Module):
         self.ln = nn.LayerNorm(config.n_embd)
         # Do not need predictor...
         self.apply(self._init_weights)
-        print(f"Total # of parameters: {sum(p.numel() for p in self.parameters())}")
 
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
@@ -297,7 +312,10 @@ class KeyNet(nn.Module):
         # We now only use the last state as key state embedding feature
         # Also, we can use the embedded states and action, namely the initial x
         # And the states number T
-        return key_emb[:, -1], x, T
+        if self.use_skip_connection:
+            return key_emb[:, -1], x, T, intermediate_feats[:-1]
+        else:
+            return key_emb[:, -1], x, T, None
 
 
 class ActNet(nn.Module):
@@ -337,7 +355,6 @@ class ActNet(nn.Module):
         # Still do not need key state predictor for we do not need the output of key states
 
         self.apply(self._init_weights)
-        print(f"Total # of parameters: {sum(p.numel() for p in self.parameters())}")
 
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
@@ -348,9 +365,13 @@ class ActNet(nn.Module):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
-    def forward(self, key_emb_out, x, T, key_state_mask=None):
+    def forward(self, key_emb_out, x, T, intermediate_feats=None, key_state_mask=None):
         x = torch.cat([key_emb_out, x], 1)
-        x, intermediate_feats = self.blocks(x, key_state_mask=key_state_mask)
+        x, intermediate_feats = self.blocks(
+            x=x,
+            key_state_mask=key_state_mask,
+            intermediate_feats=intermediate_feats
+        )
         x = self.ln(x)
         act_preds = self.action_predictor(x)
 
