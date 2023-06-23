@@ -1,4 +1,5 @@
 import numpy as np
+from math import exp
 import torch
 import torch.nn as nn
 
@@ -9,6 +10,8 @@ import pytorch_lightning as pl
 
 from torch.optim.lr_scheduler import LambdaLR, MultiStepLR
 from lr_scheduler import CosineAnnealingLRWarmup
+
+from einops import rearrange
 
 def mse_loss_with_weights(preds, targets, weights=None):
     losses = torch.mean((preds - targets) ** 2, -1)
@@ -146,6 +149,15 @@ class AutoCoT(pl.LightningModule):
             action_dim=action_dim
         )
 
+        # deal with mode collapse
+        self.p_collapse_0 = 0.01
+        self.A = 100.0
+        self.delta_T = 0
+
+        # training state
+        self.bgstate = 0  # 0, 1, 2, 3, 4, 5. 0 for normal state, 5 for collapse state
+        self.state_label = 'normal'  # 'normal', 'collapse'
+
     def encode(self, states, timesteps, actions=None):
         key_emb, x, T, int_feat = self.key_net(states, timesteps, actions)
         return key_emb, x, T, int_feat
@@ -181,7 +193,69 @@ class AutoCoT(pl.LightningModule):
         loss_act_pred = get_loss(act_preds, actions, lengths)
         loss_book_emb = emb_q_loss
 
-        loss = loss_act_pred + loss_book_emb
+        # deal with mode collapse state
+        if self.bgstate == 0:
+            if v == 0:
+                self.bgstate = 1
+            self.delta_T += 1
+        elif self.bgstate == 5:
+            if v != 0:
+                self.bgstate = 4
+        elif self.bgstate == 1:
+            if v == 0:
+                self.bgstate = 2
+                self.delta_T += (self.state_label == "normal")
+            else:
+                self.bgstate = 0
+                if self.state_label == "normal":
+                    self.delta_T += 1
+                elif self.state_label == "collapse":
+                    self.delta_T = 0
+                    self.state_label = 'normal'
+        elif self.bgstate == 2:
+            if v == 0:
+                self.bgstate = 3
+                self.delta_T += (self.state_label == "normal")
+            else:
+                self.bgstate = 1
+                self.delta_T += (self.state_label == "normal")
+        elif self.bgstate == 3:
+            if v == 0:
+                self.bgstate = 4
+                self.delta_T += (self.state_label == "normal")
+            else:
+                self.bgstate = 2
+                self.delta_T += (self.state_label == "normal")
+        elif self.bgstate == 4:
+            if v == 0:
+                self.bgstate = 5
+                self.state_label = 'collapse'
+            else:
+                self.bgstate = 3
+                self.delta_T += (self.state_label == "normal")
+        else:
+            print('Exception'), 'Not defined bgstate'
+
+        # get out of trap if necessary
+        loss_collapse = 0.0
+        if self.state_label == 'collapse':
+            d = torch.sum(key_emb.detach() ** 2, dim=1, keepdim=True) + \
+                torch.sum(self.key_states_book.embedding.weight ** 2, dim=1) -2 * \
+                torch.einsum('bd,dn->bn', key_emb.detach(), rearrange(self.key_states_book.embedding.weight, 'n d -> d n'))
+            loss_collapse = d.mean()
+        elif self.state_label == 'normal':
+            # print(self.p_collapse_0, self.A, self.delta_T)
+            proba = self.p_collapse_0 * exp(- self.A * self.delta_T)
+            if torch.rand(size=[1,]) < proba:
+                d = torch.sum(key_emb.detach() ** 2, dim=1, keepdim=True) + \
+                    torch.sum(self.key_states_book.embedding.weight ** 2, dim=1) - 2 * \
+                    torch.einsum('bd,dn->bn', key_emb.detach(),
+                                 rearrange(self.key_states_book.embedding.weight, 'n d -> d n'))
+                loss_collapse = 0.001 * d.mean()
+            else:
+                loss_collapse = 0.0
+
+        loss = loss_act_pred + loss_book_emb + loss_collapse
 
         self.log_dict(
             {
