@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 
 from module.VQ import VQ2Linear
-from module.GPT import KeyNet, ActNet
+from module.GPT import KeyNet, ActNet, RecNet
 
 import pytorch_lightning as pl
 
@@ -83,6 +83,16 @@ class ActNetConfig(BaseConfig):
         self.len_key_states = len(key_states)
 
 
+class RecNetConfig(BaseConfig):
+    def __init__(self, block_size, n_layer, n_embd, n_head, model_type,
+                 attn_pdrop, resid_pdrop):
+        super().__init__(block_size, n_embd, n_head, attn_pdrop, resid_pdrop)
+        self.n_layer = n_layer
+        assert 'cot' not in model_type and '+a' not in model_type, 'KeyNet cannot process key states input'
+        self.len_key_states = 0
+        self.model_type = model_type
+
+
 class AutoCoT(pl.LightningModule):
     def __init__(
         self,
@@ -91,6 +101,7 @@ class AutoCoT(pl.LightningModule):
         vq_beta,
         vq_legacy,
         act_config,
+        rec_config,
         vq_log=True,
         vq_kmeans_reset=None,
         vq_kmeans_step=None,
@@ -148,6 +159,11 @@ class AutoCoT(pl.LightningModule):
             state_dim=state_dim,
             action_dim=action_dim
         )
+        self.rec_net = RecNet(
+            config=rec_config,
+            state_dim=state_dim,
+            action_dim=action_dim
+        )
 
         # deal with mode collapse
         self.p_collapse_0 = 0.01
@@ -163,13 +179,19 @@ class AutoCoT(pl.LightningModule):
         return key_emb, x, T, int_feat
 
     def book_neck(self, key_emb):
-        key_emb_q, emb_q_loss, indices, v = self.key_states_book(key_emb)
+        # print('in book_neck')
+        key_emb_q, emb_q_loss, indices, v = self.key_states_book(key_emb[:, -1])
         key_emb_out = (self.book_out(key_emb_q)).view(-1, self.len_key_states, self.n_embd)
+        # print('in book_neck end')
         return key_emb_out, emb_q_loss, indices, v
 
     def decode(self, key_emb_out, x, T, int_feat, key_state_mask=None):
         act_preds = self.act_net(key_emb_out, x, T, int_feat, key_state_mask=key_state_mask)
         return act_preds
+
+    def recons(self, key_emb, T):
+        state_recs = self.rec_net(key_emb, T)
+        return state_recs
 
     # states:    pure vec states (no key states)
     # timesteps: used for the global+local position embedding design
@@ -188,9 +210,15 @@ class AutoCoT(pl.LightningModule):
         key_emb, x, T, int_feat = self.encode(states, timesteps, actions)
         key_emb_out, emb_q_loss, _, v = self.book_neck(key_emb)
         act_preds = self.decode(key_emb_out, x, T, int_feat, key_state_mask=None)
+        if '+a' in self.key_net.config.model_type:
+            key_emb_rec = key_emb[:, ::2]
+        else:
+            key_emb_rec = key_emb
+        state_recs = self.recons(key_emb_rec, T)
 
         # Obtain training losses
         loss_act_pred = get_loss(act_preds, actions, lengths)
+        loss_state_rec = get_loss(state_recs, states, lengths)  # LENGTH?????????
         loss_book_emb = emb_q_loss
 
         # deal with mode collapse state
@@ -255,12 +283,13 @@ class AutoCoT(pl.LightningModule):
             else:
                 loss_collapse = 0.0
 
-        loss = loss_act_pred + loss_book_emb + loss_collapse
+        loss = loss_act_pred + loss_state_rec + loss_book_emb + loss_collapse
 
         self.log_dict(
             {
                 "loss": loss,
                 "loss_act_pred": loss_act_pred,
+                "loss_state_rec": loss_state_rec,
                 "loss_book_emb": loss_book_emb
             }, prog_bar=True, on_step=True, on_epoch=True
         )
@@ -284,7 +313,7 @@ class AutoCoT(pl.LightningModule):
                     _, _, indices, _ = self.book_neck(key_emb)
                     expanded_indices = indices[None].expand(self.key_states_book.n_e, -1)
                     mask = (expanded_indices == arranged_mask).to(key_emb.dtype)
-                    c_grad = mask @ key_emb / mask.sum(-1)[..., :, None]
+                    c_grad = mask @ key_emb[:, -1] / mask.sum(-1)[..., :, None]
                     torch.nan_to_num_(c_grad)
 
                     self.key_states_book.embedding.weight.data = c_grad

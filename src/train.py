@@ -12,6 +12,7 @@ from data import MS2Demos, get_padding_fn
 from autocot import (
     KeyNetConfig,
     ActNetConfig,
+    RecNetConfig,
     AutoCoT,
 )
 from lr_scheduler import CosineAnnealingLRWarmup
@@ -70,6 +71,11 @@ def parse_args():
                         help="Number of attention layers in ActNet")
     parser.add_argument('--key_states', type=str, default='abc',
                         help="Which key states to use (see GPTConfig for the spec. format).")
+    parser.add_argument('--recnet_type', type=str, default='s',
+                        help="Model type for the RecNet module")
+    parser.add_argument("--n_rec_layer", default=3, type=int,
+                        help="Number of attention layers in RecNet")
+
 
     # General hyper-parameters regarding module loading and saving
     parser.add_argument("--model_name", default='TEST', type=str, help="Model name (for storing ckpts).")
@@ -155,6 +161,16 @@ if __name__ == "__main__":
         resid_pdrop=float(args.dropout),
         key_states=args.key_states
     )
+    rec_config = RecNetConfig(
+        block_size=args.context_length,
+        n_layer=args.n_rec_layer,
+        n_embd=args.n_embd,
+        n_head=args.n_head,
+        model_type=args.recnet_type,
+        attn_pdrop=float(args.dropout),
+        resid_pdrop=float(args.dropout),
+    )
+
     optimizer_config = {
         'init_lr': float(args.init_lr),
         'weight_decay': float(args.weight_decay),
@@ -186,6 +202,7 @@ if __name__ == "__main__":
         vq_kmeans_reset=args.vq_kmeans_reset,
         vq_kmeans_step=args.vq_kmeans_step,
         act_config=act_config,
+        rec_config=rec_config,
         optimizers_config=optimizer_config,
         scheduler_config=scheduler_config,
         state_dim=state_dim,
