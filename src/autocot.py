@@ -39,6 +39,22 @@ def get_loss(preds, targets, lengths):
     )
     return loss
 
+def init_centriods(datas, n_centriods):
+    N, D = datas.shape
+    i0 = torch.randint(0, N, (1,))[0]
+    cent_init = datas[i0][None, :]
+    for _ in range(n_centriods - 1):
+        d = torch.sum(datas ** 2, dim=1, keepdim=True) + \
+            torch.sum(cent_init ** 2, dim=1) - 2 * \
+            torch.einsum('bd,dn->bn', datas, rearrange(cent_init, 'n d -> d n'))
+        d_min = d.min(dim=1)[0] + 0.0001
+        f_d_min = d_min / d_min.sum()
+        # F_d_min = torch.cumsum(f_d_min, dim=0)
+        # p = torch.rand(size=(1,))[0]
+        i = f_d_min.multinomial(num_samples=1)[0]
+        cent_init = torch.cat([cent_init, datas[i][None, :]], dim=0)
+    return cent_init
+
 
 class BaseConfig:
     def __init__(self, block_size, n_embd, n_head, attn_pdrop, resid_pdrop):
@@ -184,9 +200,10 @@ class AutoCoT(pl.LightningModule):
             key_emb_g = key_emb.gather(dim=1, index=ind).squeeze(1)
             key_emb_q, emb_q_loss, indices, v = self.key_states_book(key_emb_g)
         else:
-            key_emb_q, emb_q_loss, indices, v = self.key_states_book(key_emb[:, -1])
+            key_emb_g = key_emb[:, -1]
+            key_emb_q, emb_q_loss, indices, v = self.key_states_book(key_emb_g)
         key_emb_out = (self.book_out(key_emb_q)).view(-1, self.len_key_states, self.n_embd)
-        return key_emb_out, emb_q_loss, indices, v
+        return key_emb_out, emb_q_loss, indices, v, key_emb_g
 
     def decode(self, key_emb_out, x, T, int_feat, key_state_mask=None):
         act_preds = self.act_net(key_emb_out, x, T, int_feat, key_state_mask=key_state_mask)
@@ -196,6 +213,34 @@ class AutoCoT(pl.LightningModule):
         state_recs = self.rec_net(key_emb, T)
         return state_recs
 
+    def collapse_exception(self, batch):
+        print('Index collapse :(\nResetting Key Book using K-Means')
+        arranged_mask = torch.arange(self.key_states_book.n_e)[:, None]
+        arranged_mask = arranged_mask.to(self.device)
+        states, timesteps, actions, lengths = batch['s'], batch['t'], batch['a'], batch['lengths']
+        key_emb, _, _, _ = self.encode(states, timesteps, actions)
+        if '+a' in self.key_net.config.model_type:
+            key_emb_rec = key_emb[:, ::2]
+        else:
+            key_emb_rec = key_emb
+
+        # Re-initial key book
+        _, _, indices, _, key_emb_g = self.book_neck(key_emb_rec, lengths=lengths)
+        # print('key_emb_g shape:', key_emb_g.shape)
+        # print(self.key_states_book.n_e)
+        self.key_states_book.embedding.weight.data = init_centriods(key_emb_g, self.key_states_book.n_e)
+
+        # Do kmeans algorithm to reset
+        for _ in range(self.vq_kmeans_step):
+            _, _, indices, _, key_emb_g = self.book_neck(key_emb_rec, lengths=lengths)
+            expanded_indices = indices[None].expand(self.key_states_book.n_e, -1)
+            mask = (expanded_indices == arranged_mask).to(key_emb_rec.dtype)
+            c_grad = mask @ key_emb_g / mask.sum(-1)[..., :, None]
+            torch.nan_to_num_(c_grad)
+            # print(c_grad)
+
+            self.key_states_book.embedding.weight.data = c_grad
+
     # states:    pure vec states (no key states)
     # timesteps: used for the global+local position embedding design
     #            similar to the one in Decision Transformer.
@@ -203,7 +248,7 @@ class AutoCoT(pl.LightningModule):
     # key_state_mask:
     def forward(self, states, timesteps, actions=None, key_state_mask=None):
         key_emb, x, T, int_feat = self.encode(states, timesteps, actions)
-        key_emb_out, emb_q_loss, _, v = self.book_neck(key_emb)
+        key_emb_out, emb_q_loss, _, v, _ = self.book_neck(key_emb)
         act_preds = self.decode(key_emb_out, x, T, int_feat, key_state_mask=key_state_mask)
         return act_preds, emb_q_loss
 
@@ -215,7 +260,7 @@ class AutoCoT(pl.LightningModule):
             key_emb_rec = key_emb[:, ::2]
         else:
             key_emb_rec = key_emb
-        key_emb_out, emb_q_loss, _, v = self.book_neck(key_emb_rec, lengths=lengths)
+        key_emb_out, emb_q_loss, _, v, _ = self.book_neck(key_emb_rec, lengths=lengths)
         act_preds = self.decode(key_emb_out, x, T, int_feat, key_state_mask=None)
 
         state_recs = self.recons(key_emb_rec, T)
@@ -314,26 +359,28 @@ class AutoCoT(pl.LightningModule):
     def on_train_batch_start(self, batch, batch_idx):
         if self.vq_kmeans_reset is not None:
             if self.kmeans_idx % self.vq_kmeans_reset == 0:
-                print('Resetting Key Book using K-Means')
-                arranged_mask = torch.arange(self.key_states_book.n_e)[:, None]
-                arranged_mask = arranged_mask.to(self.device)
-                # states, timesteps, actions = batch['s'], batch['t'], batch['a']
-                states, timesteps, actions, lengths = batch['s'], batch['t'], batch['a'], batch['lengths']
-                key_emb, _, _, _ = self.encode(states, timesteps, actions)
-                if '+a' in self.key_net.config.model_type:
-                    key_emb_rec = key_emb[:, ::2]
-                else:
-                    key_emb_rec = key_emb
+                self.collapse_exception(batch)
 
-                # Do kmeans algorithm to reset
-                for _ in range(self.vq_kmeans_step):
-                    _, _, indices, _ = self.book_neck(key_emb_rec, lengths=lengths)
-                    expanded_indices = indices[None].expand(self.key_states_book.n_e, -1)
-                    mask = (expanded_indices == arranged_mask).to(key_emb_rec.dtype)
-                    c_grad = mask @ key_emb[:, -1] / mask.sum(-1)[..., :, None]
-                    torch.nan_to_num_(c_grad)
-
-                    self.key_states_book.embedding.weight.data = c_grad
+                # print('Resetting Key Book using K-Means')
+                # arranged_mask = torch.arange(self.key_states_book.n_e)[:, None]
+                # arranged_mask = arranged_mask.to(self.device)
+                # # states, timesteps, actions = batch['s'], batch['t'], batch['a']
+                # states, timesteps, actions, lengths = batch['s'], batch['t'], batch['a'], batch['lengths']
+                # key_emb, _, _, _ = self.encode(states, timesteps, actions)
+                # if '+a' in self.key_net.config.model_type:
+                #     key_emb_rec = key_emb[:, ::2]
+                # else:
+                #     key_emb_rec = key_emb
+                #
+                # # Do kmeans algorithm to reset
+                # for _ in range(self.vq_kmeans_step):
+                #     _, _, indices, _ = self.book_neck(key_emb_rec, lengths=lengths)
+                #     expanded_indices = indices[None].expand(self.key_states_book.n_e, -1)
+                #     mask = (expanded_indices == arranged_mask).to(key_emb_rec.dtype)
+                #     c_grad = mask @ key_emb[:, -1] / mask.sum(-1)[..., :, None]
+                #     torch.nan_to_num_(c_grad)
+                #
+                #     self.key_states_book.embedding.weight.data = c_grad
 
             self.kmeans_idx += 1
 
