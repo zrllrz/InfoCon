@@ -93,7 +93,7 @@ def parse_args():
     parser.add_argument('--context_length', type=int, default=60,
                         help="Context size of CoTPC (the maximium length of sequences " +
                              "sampled from demo trajectories in training).")
-    parser.add_argument('--min_seq_length', type=int, default=60,
+    parser.add_argument('--min_seq_length', type=int, default=1,
                         help="Mininum length of sequences sampled from demo trajectories in training.")
 
     # Save and log frequencies.

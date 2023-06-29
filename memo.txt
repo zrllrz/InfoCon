@@ -1,0 +1,4 @@
+6-29
+
+adjust layer of actnet to see if we can relief mode collapse
+still do not know how to control mode collapse and mode variation

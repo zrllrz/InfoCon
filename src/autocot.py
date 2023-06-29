@@ -178,11 +178,14 @@ class AutoCoT(pl.LightningModule):
         key_emb, x, T, int_feat = self.key_net(states, timesteps, actions)
         return key_emb, x, T, int_feat
 
-    def book_neck(self, key_emb):
-        # print('in book_neck')
-        key_emb_q, emb_q_loss, indices, v = self.key_states_book(key_emb[:, -1])
+    def book_neck(self, key_emb, lengths=None):
+        if lengths is not None:
+            ind = (lengths[:, None, None] - 1).repeat(1, 1, key_emb.shape[2])
+            key_emb_g = key_emb.gather(dim=1, index=ind).squeeze(1)
+            key_emb_q, emb_q_loss, indices, v = self.key_states_book(key_emb_g)
+        else:
+            key_emb_q, emb_q_loss, indices, v = self.key_states_book(key_emb[:, -1])
         key_emb_out = (self.book_out(key_emb_q)).view(-1, self.len_key_states, self.n_embd)
-        # print('in book_neck end')
         return key_emb_out, emb_q_loss, indices, v
 
     def decode(self, key_emb_out, x, T, int_feat, key_state_mask=None):
@@ -208,12 +211,13 @@ class AutoCoT(pl.LightningModule):
         # Forward pass
         states, timesteps, actions, lengths = batch['s'], batch['t'], batch['a'], batch['lengths']
         key_emb, x, T, int_feat = self.encode(states, timesteps, actions)
-        key_emb_out, emb_q_loss, _, v = self.book_neck(key_emb)
-        act_preds = self.decode(key_emb_out, x, T, int_feat, key_state_mask=None)
         if '+a' in self.key_net.config.model_type:
             key_emb_rec = key_emb[:, ::2]
         else:
             key_emb_rec = key_emb
+        key_emb_out, emb_q_loss, _, v = self.book_neck(key_emb_rec, lengths=lengths)
+        act_preds = self.decode(key_emb_out, x, T, int_feat, key_state_mask=None)
+
         state_recs = self.recons(key_emb_rec, T)
 
         # Obtain training losses
@@ -265,25 +269,33 @@ class AutoCoT(pl.LightningModule):
             print('Exception'), 'Not defined bgstate'
 
         # get out of trap if necessary
-        loss_collapse = 0.0
+        assert self.state_label in ['collapse', 'normal']
         if self.state_label == 'collapse':
-            d = torch.sum(key_emb.detach() ** 2, dim=1, keepdim=True) + \
-                torch.sum(self.key_states_book.embedding.weight ** 2, dim=1) -2 * \
-                torch.einsum('bd,dn->bn', key_emb.detach(), rearrange(self.key_states_book.embedding.weight, 'n d -> d n'))
+            if lengths is not None:
+                ind = (lengths[:, None, None] - 1).repeat(1, 1, key_emb.shape[2])
+                key_emb_last = key_emb.gather(dim=1, index=ind).squeeze(1)
+            else:
+                key_emb_last = key_emb_rec[:, -1].detach()
+            d = torch.sum(key_emb_last ** 2, dim=1, keepdim=True) + \
+                torch.sum(self.key_states_book.embedding.weight ** 2, dim=1) - 2 * \
+                torch.einsum('bd,dn->bn', key_emb_last, rearrange(self.key_states_book.embedding.weight, 'n d -> d n'))
             loss_collapse = d.mean()
+            loss = loss_act_pred + loss_state_rec + loss_collapse
         elif self.state_label == 'normal':
-            # print(self.p_collapse_0, self.A, self.delta_T)
             proba = self.p_collapse_0 * exp(- self.A * self.delta_T)
-            if torch.rand(size=[1,]) < proba:
-                d = torch.sum(key_emb.detach() ** 2, dim=1, keepdim=True) + \
+            if torch.rand(size=[1, ]) < proba:
+                if lengths is not None:
+                    ind = (lengths[:, None, None] - 1).repeat(1, 1, key_emb.shape[2])
+                    key_emb_last = key_emb.gather(dim=1, index=ind).squeeze(1)
+                else:
+                    key_emb_last = key_emb_rec[:, -1].detach()
+                d = torch.sum(key_emb_last ** 2, dim=1, keepdim=True) + \
                     torch.sum(self.key_states_book.embedding.weight ** 2, dim=1) - 2 * \
-                    torch.einsum('bd,dn->bn', key_emb.detach(),
-                                 rearrange(self.key_states_book.embedding.weight, 'n d -> d n'))
+                    torch.einsum('bd,dn->bn', key_emb_last, rearrange(self.key_states_book.embedding.weight, 'n d -> d n'))
                 loss_collapse = 0.001 * d.mean()
             else:
                 loss_collapse = 0.0
-
-        loss = loss_act_pred + loss_state_rec + loss_book_emb + loss_collapse
+            loss = loss_act_pred + loss_state_rec + loss_book_emb + loss_collapse
 
         self.log_dict(
             {
@@ -307,12 +319,16 @@ class AutoCoT(pl.LightningModule):
                 arranged_mask = arranged_mask.to(self.device)
                 states, timesteps, actions = batch['s'], batch['t'], batch['a']
                 key_emb, _, _, _ = self.encode(states, timesteps, actions)
+                if '+a' in self.key_net.config.model_type:
+                    key_emb_rec = key_emb[:, ::2]
+                else:
+                    key_emb_rec = key_emb
 
                 # Do kmeans algorithm to reset
                 for _ in range(self.vq_kmeans_step):
-                    _, _, indices, _ = self.book_neck(key_emb)
+                    _, _, indices, _ = self.book_neck(key_emb_rec)
                     expanded_indices = indices[None].expand(self.key_states_book.n_e, -1)
-                    mask = (expanded_indices == arranged_mask).to(key_emb.dtype)
+                    mask = (expanded_indices == arranged_mask).to(key_emb_rec.dtype)
                     c_grad = mask @ key_emb[:, -1] / mask.sum(-1)[..., :, None]
                     torch.nan_to_num_(c_grad)
 

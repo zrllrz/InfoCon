@@ -12,6 +12,7 @@ import torch
 from autocot import (
     KeyNetConfig,
     ActNetConfig,
+    RecNetConfig,
     AutoCoT,
 )
 
@@ -34,7 +35,11 @@ def predict(model, action_hist, state_hist, t):
 
     # label key states
     key_emb, _, _, _ = model.encode(states=states, timesteps=timesteps, actions=actions)
-    _, _, indices, _ = model.book_neck(key_emb)
+    if '+a' in model.key_net.config.model_type:
+        key_emb_rec = key_emb[:, ::2]
+    else:
+        key_emb_rec = key_emb
+    _, _, indices, _ = model.book_neck(key_emb_rec)
 
     return indices
 
@@ -219,6 +224,15 @@ if __name__ == "__main__":
         resid_pdrop=float(params['dropout']),
         key_states=params['key_states']
     )
+    rec_config = RecNetConfig(
+        block_size=params['context_length'],
+        n_layer=params['n_rec_layer'],
+        n_embd=params['n_embd'],
+        n_head=params['n_head'],
+        model_type=params['recnet_type'],
+        attn_pdrop=float(params['dropout']),
+        resid_pdrop=float(params['dropout']),
+    )
     autocot_model = AutoCoT(
         key_config=key_config,
         vq_len=params['vq_len'],
@@ -226,11 +240,13 @@ if __name__ == "__main__":
         vq_legacy=params['vq_legacy'],
         vq_log=params['vq_log'],
         act_config=act_config,
+        rec_config=rec_config,
         optimizers_config=None,
         scheduler_config=None,
         state_dim=state_dim,
         action_dim=action_dim
     )
+
     autocot_model = autocot_model.cuda()
     autocot_model.load_state_dict(state_dict_from_ckpt, strict=False)
     autocot_model.eval()
@@ -248,6 +264,7 @@ if __name__ == "__main__":
         # print('init state_hist, action_hist, t:', state_hist, action_hist, t)
 
         for step in range(traj_action.shape[0]):
+            print('step #', step, end=' ')
             indices = predict(
                 model=autocot_model,
                 action_hist=action_hist,

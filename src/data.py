@@ -306,7 +306,7 @@ if __name__ == "__main__":
     
     # The default values for CoTPC for tasks in ManiSkill2.
     batch_size, num_traj, seed, min_seq_length, max_seq_length, task = \
-        256, 500, 0, 60, 60, 'PegInsertionSide-v0'
+        256, 500, 0, 1, 4, 'PegInsertionSide-v0'
     # batch_size, num_traj, seed, min_seq_length, max_seq_length, task = \
     #     256, 500, 0, 60, 60, 'PushChair-v1'
 
@@ -322,7 +322,7 @@ if __name__ == "__main__":
     collate_fn = get_padding_fn(['s', 'a', 't', 'k', 'k_label'])
     train_data = DataLoader(
         dataset=train_dataset, 
-        batch_size=1,  # batch_size,
+        batch_size=4,  # batch_size,
         collate_fn=collate_fn)
 
     data_iter = iter(train_data)
@@ -330,10 +330,20 @@ if __name__ == "__main__":
     # print(data.keys())
     # print(len(data))  # 4  
     for k, v in data.items():
-        print(k, v.shape)
-        if k == 'k_label':
-            print(v)
-        # 's', [256, 60, 51]
-        # 'a', [256, 60, 8]
-        # 't', [256, 1]
-        # 'k', [256, 2, 51]
+        if k in ['s', 'a', 'lengths']:
+            print(k)
+            print(v[0])
+            print(v[1])
+            print(v[2])
+            print(v[3])
+
+    data = next(data_iter)
+    # print(data.keys())
+    # print(len(data))  # 4
+    for k, v in data.items():
+        if k in ['s', 'a', 'lengths']:
+            print(k)
+            print(v[0])
+            print(v[1])
+            print(v[2])
+            print(v[3])

@@ -161,10 +161,8 @@ class Block(nn.Module):
         )
 
     def forward(self, x, key_state_mask=None):
-        # print('in Block layer, input shape:\t', x.shape)
         x = x + self.attn(self.ln1(x), key_state_mask=key_state_mask)
         x = x + self.mlp(self.ln2(x))
-        # print('in Block layer, output shape:\t', x.shape)
         return x
 
 
@@ -181,11 +179,9 @@ class BlocksWithCoT(nn.Module):
         self.model_type = config.model_type
         self.n_head = config.n_head
         self.len_key_states = config.len_key_states
-        # print('In BlcoksWithCoT, config.block_size:', config.block_size, 'config.len_key_states', config.len_key_states)
 
     def forward(self, x, key_state_mask=None, intermediate_feats=None):
         B, T, _ = x.shape
-        # print('In BlocksWithCoT, forward, T:', T)
 
         # During training the `key_state_mask` is not specified and we apply random
         # masking such that the first t tokens after the key state query tokens are
@@ -280,7 +276,6 @@ class KeyNet(nn.Module):
     # to the one in Decision Transformer. `key_state_mask` is used so that the
     # (all-to-all) key state query tokens can attend to later tokens.
     def forward(self, states, timesteps, actions=None):
-        # print('in KeyNet forward, states:', states.shape, 'actions:', actions.shape)
         B, T = states.shape[0], states.shape[1]
         state_embeddings = self.state_encoder(states)
 
@@ -292,13 +287,11 @@ class KeyNet(nn.Module):
         # specified; during inference, only actions in the past are specified.
         # That is, the first action prediction has no action history as inputs.
         if '+a' in self.model_type:
-            # print('state_embeddings:', state_embeddings.shape)
             token_embeddings[:, :T * 2:2, :] = state_embeddings
 
             if actions is not None:
                 # Assume the last action is not used as inputs during training.
                 action_embeddings = self.action_encoder(actions[:, :T - 1])
-                # print('action_embeddings:', action_embeddings.shape)
                 token_embeddings[:, 1:T * 2 - 1:2, :] = action_embeddings
 
         else:
@@ -313,7 +306,6 @@ class KeyNet(nn.Module):
             if '+a' in self.model_type else self.local_pos_emb
 
         x = token_embeddings + global_pos_emb + local_pos_emb
-        # print('in pre process, x:', x.shape)
 
         key_emb = self.drop(x)
         key_emb, intermediate_feats = self.blocks(key_emb)
@@ -322,12 +314,9 @@ class KeyNet(nn.Module):
         # We now only use the last state as key state embedding feature
         # Also, we can use the embedded states and action, namely the initial x
         # And the states number T
-        # print('End of KeyNet return')
         if self.use_skip_connection:
-            # return key_emb[:, -1], x, T, intermediate_feats[:-1]
             return key_emb, x, T, intermediate_feats[:-1]
         else:
-            # return key_emb[:, -1], x, T, None
             return key_emb, x, T, None
 
 
@@ -379,7 +368,6 @@ class ActNet(nn.Module):
             module.weight.data.fill_(1.0)
 
     def forward(self, key_emb_out, x, T, intermediate_feats=None, key_state_mask=None):
-        # print('In actnet, key_emb_out:', key_emb_out.shape, 'x:', x.shape, 'T:', T)
         x = torch.cat([key_emb_out, x], 1)
         x, intermediate_feats = self.blocks(
             x=x,
@@ -443,7 +431,6 @@ class RecNet(nn.Module):
             module.weight.data.fill_(1.0)
 
     def forward(self, key_emb, T):
-        # print('In recnet forward, key_emb:', key_emb.shape, 'T:', T)
         x = key_emb
         x, intermediate_feats = self.blocks(x=x)
         x = self.ln(x)
