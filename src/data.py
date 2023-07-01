@@ -343,6 +343,7 @@ if __name__ == "__main__":
     for k, v in data.items():
         if k in ['s', 'a', 'lengths']:
             print(k)
+            print(v.shape)
             print(v[0])
             print(v[1])
             print(v[2])

@@ -49,8 +49,6 @@ def init_centriods(datas, n_centriods):
             torch.einsum('bd,dn->bn', datas, rearrange(cent_init, 'n d -> d n'))
         d_min = d.min(dim=1)[0] + 0.0001
         f_d_min = d_min / d_min.sum()
-        # F_d_min = torch.cumsum(f_d_min, dim=0)
-        # p = torch.rand(size=(1,))[0]
         i = f_d_min.multinomial(num_samples=1)[0]
         cent_init = torch.cat([cent_init, datas[i][None, :]], dim=0)
     return cent_init
@@ -357,9 +355,10 @@ class AutoCoT(pl.LightningModule):
 
     @torch.no_grad()
     def on_train_batch_start(self, batch, batch_idx):
-        if self.vq_kmeans_reset is not None:
-            if self.kmeans_idx % self.vq_kmeans_reset == 0:
-                self.collapse_exception(batch)
+        if (self.vq_kmeans_reset is not None) and (self.kmeans_idx % self.vq_kmeans_reset == 0):
+            self.collapse_exception(batch)
+            # if self.kmeans_idx % self.vq_kmeans_reset == 0:
+            #     self.collapse_exception(batch)
 
                 # print('Resetting Key Book using K-Means')
                 # arranged_mask = torch.arange(self.key_states_book.n_e)[:, None]

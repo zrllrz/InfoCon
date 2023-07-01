@@ -21,14 +21,18 @@ from vec_env import get_mp_envs  # Used for parallel evaluation.
 from path import MODEL_PATH, DATA_PATH
 
 @torch.no_grad()
-def predict(model, action_hist, state_hist, t):
+def predict(model, action_hist, state_hist, t, lengths):
 
     timesteps = torch.from_numpy(t)[:, None].to(model.device)
+    lengths = torch.from_numpy(lengths).to(model.device)
+    # print(timesteps.shape)
+    # print(lengths.shape)
     if not action_hist:  # The first step.
         actions = None
     else:
         actions = torch.stack(action_hist, 1).float().to(model.device)
     states = torch.stack(state_hist, 1).float().to(model.device)
+    # print(states.shape)
 
     # print('preprocess states, actions, timesteps:', states, actions, timesteps)
     # print('their shape:', states.shape, timesteps.shape)
@@ -39,7 +43,11 @@ def predict(model, action_hist, state_hist, t):
         key_emb_rec = key_emb[:, ::2]
     else:
         key_emb_rec = key_emb
-    _, _, indices, _ = model.book_neck(key_emb_rec)
+    # print(key_emb_rec.shape)
+    # print(lengths[:, None, None] - 1)
+    # print((lengths[:, None, None] - 1).shape)
+    # print((lengths[:, None, None] - 1).repeat(1, 1, key_emb_rec.shape[2]))
+    _, _, indices, _, _ = model.book_neck(key_emb_rec, lengths=lengths)
 
     return indices
 
@@ -258,8 +266,12 @@ if __name__ == "__main__":
         # print(traj_state.shape)
         # print(traj_action.shape)
 
-        t = np.zeros(shape=[1])
+        t = np.zeros(shape=[1], dtype=np.int64)
+        lengths = np.ones(shape=[1], dtype=np.int64)
         state_hist, action_hist = [torch.from_numpy(traj_state[:1]).float()], []
+        # print('len of state_hist:', len(state_hist))
+        # print(state_hist)
+        # print(action_hist)
 
         # print('init state_hist, action_hist, t:', state_hist, action_hist, t)
 
@@ -269,7 +281,8 @@ if __name__ == "__main__":
                 model=autocot_model,
                 action_hist=action_hist,
                 state_hist=state_hist,
-                t=t
+                t=t,
+                lengths=lengths
             )
             print(indices.item(), traj_label[step])
 
@@ -282,6 +295,7 @@ if __name__ == "__main__":
             else:
                 state_hist.append(torch.from_numpy(traj_state[step + 1:step + 2]).float())
                 action_hist.append(torch.from_numpy(traj_action[step: step + 1]).float())
+                lengths += 1
         input()
 
 

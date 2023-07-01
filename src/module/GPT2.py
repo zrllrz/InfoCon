@@ -80,12 +80,10 @@ class GPTConfig:
             setattr(self, k, v)
 
 
-class CausalSelfAttentionWithCoT(nn.Module):
+class BasicCausalSelfAttention(nn.Module):
     """
-    A multi-head masked self-attention layer equipped with key state query tokens for
-    chain-of-thought predictive control. It is adapted from the minGPT repo.
+    A basic multi-head masked self-attention layer
     """
-
     def __init__(self, config):
         super().__init__()
         assert config.n_embd % config.n_head == 0
@@ -103,20 +101,12 @@ class CausalSelfAttentionWithCoT(nn.Module):
         self.proj = nn.Linear(config.n_embd, config.n_embd)
 
         # causal mask to ensure that attention is only applied to the left in the input sequence
-        block_size = config.block_size + config.len_key_states
-        self.register_buffer("mask",
-                             torch.tril(torch.ones(block_size, block_size)).view(1, 1, block_size, block_size))
+        block_size = config.block_size
+        self.register_buffer("mask", torch.tril(torch.ones(block_size, block_size)).view(1, 1, block_size, block_size))
 
         self.n_head = config.n_head
-        self.model_type = config.model_type
-        self.len_key_states = config.len_key_states
 
-        # For the learnable key state query tokens, they are actually all-to-all, meaning
-        # they can access to all future tokens during inference, and up to a future step
-        # randomly selected during training (see `key_state_mask` in forward(...)).
-        self.mask[:, :, :self.len_key_states] = 1.0
-
-    def forward(self, x, key_state_mask=None):
+    def forward(self, x):
         B, T, C = x.size()
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
@@ -128,10 +118,62 @@ class CausalSelfAttentionWithCoT(nn.Module):
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
         att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float('-inf'))  # Masked attention
 
-        # Masks used for the learnable key state query tokens, which are not causal (auto-regressive).
-        if 'cot' in self.model_type:
-            assert key_state_mask is not None
-            att = att.masked_fill(key_state_mask, float('-inf'))
+        att = F.softmax(att, dim=-1)
+        att = self.attn_drop(att)
+        y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        y = y.transpose(1, 2).contiguous().view(B, T, C)  # re-assemble all head outputs side by side
+
+        # output projection
+        y = self.resid_drop(self.proj(y))
+        return y
+
+
+class ActCausalSelfAttention(nn.Module):
+    """
+    Multi-head masked self-attention layers for ActNet
+    Need to deal with s(0: t-1), a(0: t-2), k(0: t-1), 3 * config.block_size real block_size
+    """
+    def __init__(self, config):
+        super().__init__()
+        assert config.n_embd % config.n_head == 0
+
+        # key, query, value projections for all heads
+        self.key = nn.Linear(config.n_embd, config.n_embd)
+        self.query = nn.Linear(config.n_embd, config.n_embd)
+        self.value = nn.Linear(config.n_embd, config.n_embd)
+
+        # regularization
+        self.attn_drop = nn.Dropout(config.attn_pdrop)
+        self.resid_drop = nn.Dropout(config.resid_pdrop)
+
+        # output projection
+        self.proj = nn.Linear(config.n_embd, config.n_embd)
+
+        # causal mask to ensure that attention is only applied to the left in the input sequence
+        block_size = 3 * config.block_size
+
+        # It is a tricky mask, see docs for more details
+        mask1 = torch.repeat_interleave(torch.tril(torch.ones(config.block_size, config.block_size)), 3, dim=0)
+        mask2 = torch.eye(config.block_size)
+        mask = torch.zeros(size=(block_size, block_size))
+        mask[:, ::3] = mask1
+        mask[1::3, 1::3] = mask2
+        mask[2:, 2::3] = mask1[:-2, :]
+        self.register_buffer("mask", mask.view(1, 1, block_size, block_size))
+
+        self.n_head = config.n_head
+
+    def forward(self, x):
+        B, T, C = x.size()
+
+        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
+        k = self.key(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+        q = self.query(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+        v = self.value(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+
+        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+        att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float('-inf'))  # Masked attention
 
         att = F.softmax(att, dim=-1)
         att = self.attn_drop(att)
@@ -145,14 +187,20 @@ class CausalSelfAttentionWithCoT(nn.Module):
 
 class Block(nn.Module):
     """
-    A Transformer block with masks specified for the learnable key state query tokens.
+    A Transformer block,
+        select it to be:
+            BasicCausalSelfAttention or ActCausalSelfAttention
+        with config.block_type {'basic', 'act'}
     """
 
     def __init__(self, config):
         super().__init__()
         self.ln1 = nn.LayerNorm(config.n_embd)
         self.ln2 = nn.LayerNorm(config.n_embd)
-        self.attn = CausalSelfAttentionWithCoT(config)
+        if config.block_type == 'basic':
+            self.attn = BasicCausalSelfAttention(config)
+        elif config.block_type == 'act':
+            self.attn = ActCausalSelfAttention(config)
         self.mlp = nn.Sequential(
             nn.Linear(config.n_embd, 4 * config.n_embd),
             GELU(),
@@ -160,107 +208,79 @@ class Block(nn.Module):
             nn.Dropout(config.resid_pdrop),
         )
 
-    def forward(self, x, key_state_mask=None):
-        x = x + self.attn(self.ln1(x), key_state_mask=key_state_mask)
+    def forward(self, x):
+        x = x + self.attn(self.ln1(x))
         x = x + self.mlp(self.ln2(x))
         return x
 
 
-class BlocksWithCoT(nn.Module):
+class BlockLayers(nn.Module):
     """
-    A wrapper class for a sequence of Transformer blocks with masks specified for
-    the learnable key state query tokens.
+    A wrapper class for a sequence of Transformer blocks
+        select it to be:
+            BasicCausalSelfAttention or ActCausalSelfAttention
+        with config.block_type {'basic', 'act'}
     """
 
     def __init__(self, config):
         super().__init__()
         # Register all the individual blocks.
         self.block_list = nn.ModuleList(Block(config) for _ in range(config.n_layer))
-        self.model_type = config.model_type
         self.n_head = config.n_head
-        self.len_key_states = config.len_key_states
 
-    def forward(self, x, key_state_mask=None, intermediate_feats=None):
+    def forward(self, x):
         B, T, _ = x.shape
-
-        # During training the `key_state_mask` is not specified and we apply random
-        # masking such that the first t tokens after the key state query tokens are
-        # 0's and otherwise 1's, where t is uniformly sampled from 0 to traj length.
-        # Here 1's mean no attention over the underlying masked tokens.
-        # During inference, the evaluator should specify key state masks.
-        if key_state_mask is None:
-            # If use both state and action history,
-            # make sure masks for s and a has the same length.
-            if '+a' in self.model_type:
-                r = torch.randint(0, (T - self.len_key_states) // 2, [B])[:, None] * 2
-            else:
-                r = torch.randint(0, T - self.len_key_states, [B])[:, None]
-            # When '+a', we always ignore the last action token (set mask=1).
-            mask = torch.arange(0, T).repeat(B, 1) > r + self.len_key_states
-            key_state_mask = torch.zeros([B, self.n_head, T, T], dtype=torch.bool, device=x.device)
-            key_state_mask[:, :, :self.len_key_states, :] = \
-                mask[:, None, None, :].repeat(1, self.n_head, self.len_key_states, 1)
 
         output = []  # Also keep the intermediate results.
 
-        skip_begin = None
-        skip_end = None
-        use_skip = intermediate_feats is not None
-        if use_skip is True:
-            skip_begin = 1
-            skip_end = min(len(intermediate_feats) + 1, len(self.block_list))
-
-        i_int_feat = 0
-        for i_layer, block in enumerate(self.block_list):
-            if use_skip is True and skip_begin <= i_layer < skip_end:
-                # USELESS CAN DELETE
-                x[:, -intermediate_feats[i_int_feat].shape[1]:, ...] \
-                    = x[:, -intermediate_feats[i_int_feat].shape[1]:, ...] + intermediate_feats[i_int_feat]
-                x = block(x, key_state_mask=key_state_mask)
-                i_int_feat += 1
-            else:
-                x = block(x, key_state_mask=key_state_mask)
+        for block in self.block_list:
+            x = block(x)
             output.append(x)
 
         return x, output
 
 
-class KeyNet(nn.Module):
+class BasicNet(nn.Module):
     """
-    GPT Encoder, to encoder s,a sequence into key states
-    So it is always without cot...
+    GPT Encoder.
+    In our method, we use it as KeyNet to:
+        encode s[0:(t-1)], a[0:(t-1)] into k_emb[0:(t-1)]
+        If set config.do_commit True, it also:
+            encode s[0:(t-1)], a[0:(t-2)] into k_commit[0:(t-1)]
+    We can also use it to:
+        encode s[0:(t-1)], a[0:(t-2)] into k_commit[0:(t-1)]
+    Independently.
     """
     def __init__(self, config, state_dim=-1, action_dim=-1):
         super().__init__()
 
         assert state_dim > 0 and action_dim > 0
+        assert config.block_type == 'basic'
         self.config = config
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.use_skip_connection = config.use_skip_connection  # USELESS CAN DELETE
-        self.model_type = config.model_type
-        self.block_size = config.block_size
-        assert 'cot' not in config.model_type, 'Again, we do not receive cot input in KeyNet'
+        self.block_size = 2 * config.block_size
 
-        p_size = config.block_size // 2 if '+a' in self.model_type else config.block_size
-        self.local_pos_emb = nn.Parameter(torch.zeros(1, p_size, config.n_embd))
-        self.global_pos_emb = nn.Parameter(
-            torch.zeros(1, config.max_timestep, config.n_embd))
+        self.do_commit = config.do_commit
+
+        self.local_pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
+        self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep, config.n_embd))
 
         self.drop = nn.Dropout(config.embd_pdrop)
 
         # Transformer (attention layers) with CoT.
-        self.blocks = BlocksWithCoT(config)
+        self.blocks = BlockLayers(config)
 
         # State embeddings.
         self.state_encoder = MLP(self.state_dim, config.n_embd, hidden_dims=[256])
 
         # Action embeddings.
-        if '+a' in self.model_type:
-            self.action_encoder = MLP(self.action_dim, config.n_embd, hidden_dims=[256])
+        self.action_encoder = MLP(self.action_dim, config.n_embd, hidden_dims=[256])
 
         self.ln = nn.LayerNorm(config.n_embd)
-        # Do not need predictor...
+        # Key predictor
+        self.key_predictor = MLP(config.n_embd, config.n_embd, hidden_dims=[256, 256])
+
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
@@ -287,75 +307,80 @@ class KeyNet(nn.Module):
         # If using action history as inputs: during training, all actions are
         # specified; during inference, only actions in the past are specified.
         # That is, the first action prediction has no action history as inputs.
-        if '+a' in self.model_type:
-            token_embeddings[:, :T * 2:2, :] = state_embeddings
+        token_embeddings[:, :T * 2:2, :] = state_embeddings
 
-            if actions is not None:
-                # Assume the last action is not used as inputs during training.
-                action_embeddings = self.action_encoder(actions[:, :T - 1])
-                token_embeddings[:, 1:T * 2 - 1:2, :] = action_embeddings
-
-        else:
-            token_embeddings[:, :T, :] = state_embeddings
+        if actions is not None:
+            # Assume the last action is not used as inputs during training.
+            action_embeddings = self.action_encoder(actions[:, :T])
+            # !!!!! input action is empty when end !!!!!!
+            token_embeddings[:, 1:(T * 2 + 1):2, :] = action_embeddings
 
         # Set up position embeddings similar to that in Decision Transformer.
         global_pos_emb = torch.repeat_interleave(self.global_pos_emb, B, dim=0)
         timesteps_rp = torch.repeat_interleave(timesteps[:, None], self.config.n_embd, dim=-1)
-        global_pos_emb = torch.gather(
-            global_pos_emb, 1, timesteps_rp.long())  # BS x 1 x D
-        local_pos_emb = torch.repeat_interleave(self.local_pos_emb, 2, dim=1) \
-            if '+a' in self.model_type else self.local_pos_emb
+        global_pos_emb = torch.gather(global_pos_emb, 1, timesteps_rp.long())  # BS x 1 x D
+        # verify here!!!
+
+        local_pos_emb = torch.repeat_interleave(self.local_pos_emb, 2, dim=1)
 
         x = token_embeddings + global_pos_emb + local_pos_emb
 
         key_emb = self.drop(x)
-        key_emb, intermediate_feats = self.blocks(key_emb)
+        key_emb, _ = self.blocks(key_emb)
         key_emb = self.ln(key_emb)
 
-        # We now only use the last state as key state embedding feature
-        # Also, we can use the embedded states and action, namely the initial x
-        # And the states number T
-        if self.use_skip_connection:
-            return key_emb, x, T, intermediate_feats[:-1]
+        key_emb = self.key_predictor(key_emb)
+
+        key_soft = key_emb[:, 1:(2*T+1):2, :]
+
+        # Return: key_soft, key_commit
+        if self.do_commit is False:
+            return key_soft, None
         else:
-            return key_emb, x, T, None
+            key_commit_soft = key_soft[:, 0:(2*T):2, :]
+            return key_soft, key_commit_soft
 
 
 class ActNet(nn.Module):
     """
-    GPT Decoder, to decode key_state_prompt, s,a sequence into action prediction
-    So it is always with cot
+    In our method, we use ActNet to:
+        decode k[0:(t-1)], s[0:(t-1)], a[0:(t-2)] into a[0:(t-1)]
+        If set config.do_commit True, it also:
+            encode s[0:(t-1)], a[0:(t-2)] into k_commit[0:(t-1)]
     """
-
     def __init__(self, config, state_dim=-1, action_dim=-1):
         super().__init__()
 
         assert state_dim > 0 and action_dim > 0
+        assert config.block_type == 'act'
         self.config = config
         self.state_dim = state_dim
         self.action_dim = action_dim
+        self.block_size = 3 * config.block_size
 
-        assert 'cot' in config.model_type
-        self.model_type = config.model_type
-        self.key_states = config.key_states
-        self.len_key_states = config.len_key_states
-        self.block_size = config.block_size
+        self.do_commit = config.do_commit
 
-        # We must have cot!!!
-        # We do not need key_state_pos_emb for our output from keynet is trying to do it
-        # self.key_state_pos_emb = nn.Parameter(
-        #     torch.zeros(1, self.len_key_states, config.n_embd))
+        self.local_pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
+        self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep, config.n_embd))
 
-        # Transformer (attention layers) with CoT.
-        self.blocks = BlocksWithCoT(config)
+        self.drop = nn.Dropout(config.embd_pdrop)
 
-        # No state and action embeddings
+        self.blocks = BlockLayers(config)
 
-        # Action predictor.
+        # State embeddings.
+        self.state_encoder = MLP(self.state_dim, config.n_embd, hidden_dims=[256])
+
+        # Action embeddings.
+        self.action_encoder = MLP(self.action_dim, config.n_embd, hidden_dims=[256])
+
         self.ln = nn.LayerNorm(config.n_embd)
+
+        # Action predictor
         self.action_predictor = MLP(config.n_embd, action_dim, hidden_dims=[256, 256])
 
-        # Still do not need key state predictor for we do not need the output of key states
+        # Key predictor
+        if config.do_commit:
+            self.key_predictor = MLP(config.n_embd, config.n_embd, hidden_dims=[256, 256])
 
         self.apply(self._init_weights)
 
@@ -368,25 +393,37 @@ class ActNet(nn.Module):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
-    def forward(self, key_emb_out, x, T, intermediate_feats=None, key_state_mask=None):
-        x = torch.cat([key_emb_out, x], 1)
-        x, intermediate_feats = self.blocks(
-            x=x,
-            key_state_mask=key_state_mask,
-            intermediate_feats=intermediate_feats
-        )
+    def forward(self, key_hard, states, timesteps, actions=None):
+        B, T = states.shape[0], states.shape[1]
+        state_embeddings = self.state_encoder(states)
+
+        token_embeddings = torch.zeros([B, self.block_size, self.config.n_embd], dtype=torch.float32, device=states.device)
+
+        token_embeddings[:, :(T*3):3, :] = state_embeddings
+        token_embeddings[:, 1:(T*3+1):3, :] = key_hard
+        if actions is not None:
+            # Assume the last action is not used as inputs during training.
+            token_embeddings[:, 2:(T*3-1):3, :] = self.action_encoder(actions[:, :(T - 1)])
+
+        # Set up position embeddings similar to that in Decision Transformer.
+        global_pos_emb = torch.repeat_interleave(self.global_pos_emb, B, dim=0)
+        timesteps_rp = torch.repeat_interleave(timesteps[:, None], self.config.n_embd, dim=-1)
+        global_pos_emb = torch.gather(global_pos_emb, 1, timesteps_rp.long())  # BS x 1 x D
+
+        local_pos_emb = torch.repeat_interleave(self.local_pos_emb, 3, dim=1)
+
+        x = token_embeddings + global_pos_emb + local_pos_emb
+
+        x = self.drop(x)
+        x, _ = self.blocks(x)
         x = self.ln(x)
-        act_preds = self.action_predictor(x)
 
-        act_preds = torch.split(act_preds, [self.len_key_states, self.block_size], dim=1)[1]
-
-        # Get rid of dims for action tokens.
-        if '+a' in self.model_type:
-            # Remove the extra tokens when in eval mode.
-            act_preds = act_preds[:, :T * 2:2]
-
-        # Only have act_preds output
-        return act_preds
+        act_preds = self.action_predictor(x[:, 1:(T*3+1):3, :])
+        if self.do_commit is False:
+            return act_preds, None
+        else:
+            key_commit_soft = self.key_predictor(x[:, 0:(T*3):3, :])
+            return act_preds, key_commit_soft
 
 
 class RecNet(nn.Module):
@@ -439,3 +476,4 @@ class RecNet(nn.Module):
 
         # Only have act_preds output
         return state_recs[:, :T]
+
