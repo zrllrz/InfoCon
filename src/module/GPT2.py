@@ -424,3 +424,7 @@ class ActNet(nn.Module):
         else:
             key_commit_soft = self.key_predictor(x[:, 0:(T*3):3, :])
             return act_preds, key_commit_soft
+
+    # Label when eval
+    def label(self, states, timesteps, actions=None):
+        return
