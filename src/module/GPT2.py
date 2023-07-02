@@ -259,23 +259,22 @@ class BasicNet(nn.Module):
         self.config = config
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.block_size = 2 * config.block_size
+        self.block_size = config.block_size * 2  # state + action
 
-        self.do_commit = config.do_commit
+        self.do_commit = config.do_commit  # if True, label will be predicted here
 
         self.local_pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
         self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep, config.n_embd))
 
+        # State embeddings & Action embeddings
+        self.state_encoder = MLP(self.state_dim, config.n_embd, hidden_dims=[256])
+        self.action_encoder = MLP(self.action_dim, config.n_embd, hidden_dims=[256])
+
+        # embedding dropout
         self.drop = nn.Dropout(config.embd_pdrop)
 
-        # Transformer (attention layers) with CoT.
+        # Transformer (attention layers)
         self.blocks = BlockLayers(config)
-
-        # State embeddings.
-        self.state_encoder = MLP(self.state_dim, config.n_embd, hidden_dims=[256])
-
-        # Action embeddings.
-        self.action_encoder = MLP(self.action_dim, config.n_embd, hidden_dims=[256])
 
         self.ln = nn.LayerNorm(config.n_embd)
         # Key predictor
@@ -313,6 +312,8 @@ class BasicNet(nn.Module):
             # Assume the last action is not used as inputs during training.
             action_embeddings = self.action_encoder(actions[:, :T])
             # !!!!! input action is empty when end !!!!!!
+            # dataloader avoid this (but will lead to un-training for last-state situation)
+            # So labeling last states may have problem...
             token_embeddings[:, 1:(T * 2 + 1):2, :] = action_embeddings
 
         # Set up position embeddings similar to that in Decision Transformer.
@@ -330,6 +331,8 @@ class BasicNet(nn.Module):
         key_emb = self.ln(key_emb)
 
         key_emb = self.key_predictor(key_emb)
+
+        # do you need to minus the global & loacl embedding here???
 
         key_soft = key_emb[:, 1:(2*T+1):2, :]
 
@@ -356,22 +359,22 @@ class ActNet(nn.Module):
         self.config = config
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.block_size = 3 * config.block_size
+        self.block_size = config.block_size * 3
 
         self.do_commit = config.do_commit
 
         self.local_pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
         self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep, config.n_embd))
 
+        # State embeddings & Action embeddings
+        self.state_encoder = MLP(self.state_dim, config.n_embd, hidden_dims=[256])
+        self.action_encoder = MLP(self.action_dim, config.n_embd, hidden_dims=[256])
+
+        # embedding dropout
         self.drop = nn.Dropout(config.embd_pdrop)
 
+        # Transformer (attention layers)
         self.blocks = BlockLayers(config)
-
-        # State embeddings.
-        self.state_encoder = MLP(self.state_dim, config.n_embd, hidden_dims=[256])
-
-        # Action embeddings.
-        self.action_encoder = MLP(self.action_dim, config.n_embd, hidden_dims=[256])
 
         self.ln = nn.LayerNorm(config.n_embd)
 
@@ -382,9 +385,12 @@ class ActNet(nn.Module):
         if config.do_commit:
             self.key_predictor = MLP(config.n_embd, config.n_embd, hidden_dims=[256, 256])
 
+        print('init module in ActNet')
         self.apply(self._init_weights)
+        print('init module in ActNet done')
 
     def _init_weights(self, module):
+        print(module)
         if isinstance(module, (nn.Linear, nn.Embedding)):
             module.weight.data.normal_(mean=0.0, std=0.02)
             if isinstance(module, nn.Linear) and module.bias is not None:
@@ -393,15 +399,17 @@ class ActNet(nn.Module):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
-    def forward(self, key_hard, states, timesteps, actions=None):
+    def forward(self, states, timesteps, actions=None, key_hard=None):
         B, T = states.shape[0], states.shape[1]
         state_embeddings = self.state_encoder(states)
 
         token_embeddings = torch.zeros([B, self.block_size, self.config.n_embd], dtype=torch.float32, device=states.device)
 
         token_embeddings[:, :(T*3):3, :] = state_embeddings
-        token_embeddings[:, 1:(T*3+1):3, :] = key_hard
-        if actions is not None:
+        if key_hard is not None:   # training
+            token_embeddings[:, 1:(T*3+1):3, :] = key_hard
+        # else your are trying to label k(t-1)
+        if actions is not None:  # actions is None when at s0
             # Assume the last action is not used as inputs during training.
             token_embeddings[:, 2:(T*3-1):3, :] = self.action_encoder(actions[:, :(T - 1)])
 
@@ -418,13 +426,16 @@ class ActNet(nn.Module):
         x, _ = self.blocks(x)
         x = self.ln(x)
 
-        act_preds = self.action_predictor(x[:, 1:(T*3+1):3, :])
-        if self.do_commit is False:
-            return act_preds, None
+        if key_hard is None:
+            # labeling, make sure you use commitment, return keys
+            assert self.do_commit is True
+            key_commit_soft = self.key_predictor(x[:, 0:(T * 3):3, :])
+            return None, key_commit_soft
         else:
-            key_commit_soft = self.key_predictor(x[:, 0:(T*3):3, :])
-            return act_preds, key_commit_soft
-
-    # Label when eval
-    def label(self, states, timesteps, actions=None):
-        return
+            # training, always need to return prediction of action
+            act_preds = self.action_predictor(x[:, 1:(T * 3 + 1):3, :])
+            if self.do_commit is False:
+                return act_preds, None
+            else:
+                key_commit_soft = self.key_predictor(x[:, 0:(T*3):3, :])
+                return act_preds, key_commit_soft
