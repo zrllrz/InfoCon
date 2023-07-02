@@ -4,6 +4,7 @@ Reference: https://github.com/ritheshkumar95/pytorch-vqvae/blob/master/functions
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.autograd import Function
 from einops import rearrange
 
@@ -100,3 +101,18 @@ class VQ2(nn.Module):
             return z_q, loss, min_encoding_indices, v
         else:
             return z_q, loss, min_encoding_indices, None
+
+    # softmax-based commitment loss
+    # def get_soft_commit_loss(self, z_commit_soft, indices):
+    #     z = z_commit_soft.contiguous()
+    #     z_flattened = z.view(-1, self.e_dim)
+    #     d = torch.sum(z_flattened ** 2, dim=1, keepdim=True) + \
+    #         torch.sum(self.embedding.weight ** 2, dim=1) - 2 * \
+    #         torch.einsum('bd,dn->bn', z_flattened, rearrange(self.embedding.weight, 'n d -> d n'))
+    #     d_exp = torch.exp(d)
+    #     d_soft_term = torch.log(torch.add(torch.sum(d_exp, dim=1), 1e-5))
+    #     loss_soft_penalty = torch.sum(d_soft_term)
+    #     return loss_soft_penalty
+
+
+

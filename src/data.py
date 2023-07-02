@@ -96,7 +96,7 @@ class MS2Demos(Dataset):
         data_dict = {
             's': self.data['obs'][index][s_idx:e_idx].astype(np.float32),
             'a': self.data['actions'][index][s_idx:e_idx].astype(np.float32),
-            't': np.array([s_idx]).astype(np.float32),  
+            't': np.array([s_idx]).astype(np.float32),
             # 'env_states': self.data['env_states'][index][s_idx:e_idx].astype(np.float32),
         }     
         if self.with_key_states:
@@ -126,7 +126,7 @@ class MS2Demos(Dataset):
             ids = []
             for i in range(10):  # Hard-code the 10 data splits for permutation.
                 t_ids = np.random.permutation(len(traj_all)//10)[:length//10]
-                t_ids += i*len(traj_all)//10
+                t_ids += i * len(traj_all) // 10
                 ids.append(t_ids)
             ids = np.concatenate(ids)
         # Since PushChair uses 5 different faucet models, we shuffle the data
