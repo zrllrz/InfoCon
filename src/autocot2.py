@@ -48,7 +48,7 @@ def init_centriods(datas, n_centriods):
         d = torch.sum(datas ** 2, dim=1, keepdim=True) + \
             torch.sum(cent_init ** 2, dim=1) - 2 * \
             torch.einsum('bd,dn->bn', datas, rearrange(cent_init, 'n d -> d n'))
-        d_min = d.min(dim=1)[0] + 0.0001
+        d_min = d.min(dim=1)[0] + 1e-5
         f_d_min = d_min / d_min.sum()
         i = f_d_min.multinomial(num_samples=1)[0]
         cent_init = torch.cat([cent_init, datas[i][None, :]], dim=0)
@@ -195,21 +195,38 @@ class AutoCoT(pl.LightningModule):
         else:
             print("#### should not reach here ####")
 
+        # flag_collapse: use for record whether we are in 'index collapse' situation
+        self.flag_collapse = False
+        self.kmeans_idx = 0
+
+    @torch.no_grad()
     def kmeans_reset(self, key_soft):
+        print('kmeans resetting...')
         arranged_mask = torch.arange(self.key_book.n_e)[:, None]
         arranged_mask = arranged_mask.to(self.device)
 
         key_soft_flatten = key_soft.view(-1, self.n_embd)
+
+        # kmeans++ initialization
         self.key_book.embedding.weight.data = init_centriods(key_soft_flatten, self.key_book.n_e)
 
         # Do kmeans algorithm to reset
         for _ in range(self.vq_kmeans_step):
-            _, _, indices, _ = self.book_neck(key_soft, flatten_in=True, flatten_out=True)
-            expanded_indices = indices[None].expand(self.key_states_book.n_e, -1)
+            _, _, indices, _ = self.key_book(key_soft_flatten, flatten_in=True, flatten_out=True)
+            expanded_indices = indices[None].expand(self.key_book.n_e, -1)
             mask = (expanded_indices == arranged_mask).to(key_soft_flatten.dtype)
             c_grad = mask @ key_soft_flatten / mask.sum(-1)[..., :, None]
             torch.nan_to_num_(c_grad)
-            self.key_states_book.embedding.weight.data = c_grad
+            self.key_book.embedding.weight.data = c_grad
+        print('kmeans resetting done')
+
+    @torch.no_grad()
+    def on_train_batch_start(self, batch, batch_idx):
+        if self.flag_collapse or ((self.vq_kmeans_reset is not None) and (self.kmeans_idx % self.vq_kmeans_reset == 0)):
+            states, timesteps, actions, _ = batch['s'], batch['t'], batch['a'], batch['lengths']
+            key_soft, _ = self.key_net(states, timesteps, actions)
+            self.kmeans_reset(key_soft)
+        self.kmeans_idx += 1
 
     def training_step(self, batch, batch_idx):
         states, timesteps, actions, lengths = batch['s'], batch['t'], batch['a'], batch['lengths']
@@ -222,6 +239,11 @@ class AutoCoT(pl.LightningModule):
         # VQ mapping
         key_hard, loss_dict, indices, var = self.key_book(key_soft)
 
+        if var == 0 and self.flag_collapse is False:
+            self.flag_collapse = True
+        elif var != 0 and self.flag_collapse is True:
+            self.flag_collapse = False
+
         # Reconstruction
         # from s[0:T-1], a[0:T-2], k_hard[0:T-1] get a[0:T-1]
         # if commit, from s[0:T-1], a[0:T-2] get k[0:T-1]
@@ -231,15 +253,12 @@ class AutoCoT(pl.LightningModule):
         if self.commit_type == 'independent':
             # commit with commit_net
             _, key_commit_soft = self.commit_net(states, timesteps, actions)
-
         elif self.commit_type == 'key':
             # using act_net commit_ket
             key_commit_soft = kcs_key_net
-
         elif self.commit_type == 'act':
             # using act_net commit_ket
             key_commit_soft = kcs_act_net
-
         else:
             key_commit_soft = None
         assert key_commit_soft is not None
@@ -282,15 +301,12 @@ class AutoCoT(pl.LightningModule):
         if self.commit_type == 'independent':
             # commit with commit_net
             _, key_commit_soft = self.commit_net(states, timesteps, actions)
-
         elif self.commit_type == 'key':
             # using key_net
             _, key_commit_soft = self.key_net(states, timesteps, actions)
-
         elif self.commit_type == 'act':
             # using act_net commit_ket
             _, key_commit_soft = self.act_net(states)
-
         else:
             key_commit_soft = None
         assert key_commit_soft is not None

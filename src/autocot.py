@@ -357,29 +357,6 @@ class AutoCoT(pl.LightningModule):
     def on_train_batch_start(self, batch, batch_idx):
         if (self.vq_kmeans_reset is not None) and (self.kmeans_idx % self.vq_kmeans_reset == 0):
             self.collapse_exception(batch)
-            # if self.kmeans_idx % self.vq_kmeans_reset == 0:
-            #     self.collapse_exception(batch)
-
-                # print('Resetting Key Book using K-Means')
-                # arranged_mask = torch.arange(self.key_states_book.n_e)[:, None]
-                # arranged_mask = arranged_mask.to(self.device)
-                # # states, timesteps, actions = batch['s'], batch['t'], batch['a']
-                # states, timesteps, actions, lengths = batch['s'], batch['t'], batch['a'], batch['lengths']
-                # key_emb, _, _, _ = self.encode(states, timesteps, actions)
-                # if '+a' in self.key_net.config.model_type:
-                #     key_emb_rec = key_emb[:, ::2]
-                # else:
-                #     key_emb_rec = key_emb
-                #
-                # # Do kmeans algorithm to reset
-                # for _ in range(self.vq_kmeans_step):
-                #     _, _, indices, _ = self.book_neck(key_emb_rec, lengths=lengths)
-                #     expanded_indices = indices[None].expand(self.key_states_book.n_e, -1)
-                #     mask = (expanded_indices == arranged_mask).to(key_emb_rec.dtype)
-                #     c_grad = mask @ key_emb[:, -1] / mask.sum(-1)[..., :, None]
-                #     torch.nan_to_num_(c_grad)
-                #
-                #     self.key_states_book.embedding.weight.data = c_grad
 
             self.kmeans_idx += 1
 
