@@ -67,10 +67,13 @@ class VQ2(nn.Module):
         self.embedding = nn.Embedding(self.n_e, self.e_dim)
         self.embedding.weight.data.uniform_(-1.0 / self.n_e, 1.0 / self.n_e)
 
-    def forward(self, z):
+    def forward(self, z, flatten_in=False, flatten_out=False):
         # z shape (bs, T, e_dim)
         z = z.contiguous()
-        z_flattened = z.view(-1, self.e_dim)  # (bs * T, e_dim)
+        if flatten_in is False:
+            z_flattened = z.view(-1, self.e_dim)  # (bs * T, e_dim)
+        else:
+            z_flattened = z
 
 
         # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
@@ -94,7 +97,8 @@ class VQ2(nn.Module):
         z_q = z + (z_q - z).detach()
         z_q = z_q.contiguous()
 
-        min_encoding_indices = min_encoding_indices.reshape(z_q.shape[0], z_q.shape[1])
+        if flatten_out is False:
+            min_encoding_indices = min_encoding_indices.reshape(z_q.shape[0], z_q.shape[1])
         # (B, T)
         if self.log_choice is True:
             v = torch.var(min_encoding_indices.to(dtype=torch.float32))

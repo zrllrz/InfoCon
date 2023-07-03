@@ -17,4 +17,5 @@ CUDA_VISIBLE_DEVICES=0 python train2.py \
     --task=PegInsertionSide-v0 --control_mode=pd_joint_delta_pos --obs_mode=state --seed=0 \
     --num_traj=-1 --context_length=60 --min_seq_length=60 \
     --save_every=1000 --log_every=1000 \
-    --num_workers=5, --multiplier=52
+    --num_workers=5 --multiplier=52
+

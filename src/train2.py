@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 
 from data import MS2Demos, get_padding_fn
-from module.GPT2 import (
+from autocot2 import (
     BasicNetConfig,
     ActNetConfig,
     AutoCoT

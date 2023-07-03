@@ -1,0 +1,1 @@
+scp -r -p 2522 /Users/lrz/Documents/Projects/visiting_research/AutoCoT/src/ rzliu@147.8.182.173:/home/rzliu/AutoCoT/src/
