@@ -10,7 +10,7 @@ CUDA_VISIBLE_DEVICES=7 python train2.py \
     --beta1=0.9 --beta2=0.95 \
     --dropout=0.0 --n_head=8 --n_embd=128 --sub_pos=True \
     --n_key_layer=3 \
-    --vq_n_e=10 --vq_beta=0.2 --vq_legacy=True --vq_smooth=None --vq_log=True --vq_kmeans_reset=1000 --vq_kmeans_step=100 \
+    --vq_n_e=10 --vq_beta=0.2 --vq_legacy=False --vq_smooth=None --vq_log=True --vq_kmeans_reset=1000 --vq_kmeans_step=100 \
     --n_act_layer=3 --seq_k=False \
     --commit=independent --n_commit_layer=3 \
     --model_name=test_legacy_true \
