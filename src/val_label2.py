@@ -9,7 +9,7 @@ from mani_skill2.utils.io_utils import load_json
 import mani_skill2.envs
 import torch
 
-from module.GPT2 import (
+from autocot2 import (
     BasicNetConfig,
     ActNetConfig,
     AutoCoT
@@ -29,6 +29,9 @@ def predict(model, action_hist, state_hist, t):
     else:
         actions = torch.stack(action_hist, 1).float().to(model.device)
     states = torch.stack(state_hist, 1).float().to(model.device)
+
+    # print('shape of states:', states.shape)
+    # print('shape of timesteps', timesteps.shape)
 
     # use the label_single method in AutoCoT
     indices = model.label_single(states, timesteps, actions)
@@ -66,7 +69,7 @@ def parse_args():
     parser.add_argument("--model_name", default='', type=str, help="Model name to be loaded.")
     parser.add_argument("--from_ckpt", default=-1, type=int, help="Ckpt of the module to be loaded.")
 
-    parser.add_argument("--eval_max_steps", default=200, type=int, help="Max steps allowed in eval.")
+    # parser.add_argument("--eval_max_steps", default=200, type=int, help="Max steps allowed in eval.")
 
     return parser.parse_args()
 
@@ -244,6 +247,7 @@ if __name__ == "__main__":
         block_size=params['context_length'],
         n_layer=params['n_key_layer'],
         do_commit=(params['commit'] == 'key'),
+        sub_pos=False if 'sub_pos' not in params.keys() else params['sub_pos'],
         max_timestep=max_timestep
     )
     act_config = ActNetConfig(
@@ -254,7 +258,9 @@ if __name__ == "__main__":
         embd_pdrop=float(params['dropout']),
         block_size=params['context_length'],
         n_layer=params['n_act_layer'],
+        seq_k=None if 'seq_k' not in params.keys() else params['seq_k'],
         do_commit=(params['commit'] == 'act'),
+        sub_pos=False if 'sub_pos' not in params.keys() else params['sub_pos'],
         max_timestep=max_timestep
     )
     if params['commit'] == 'independent':
@@ -267,7 +273,8 @@ if __name__ == "__main__":
             block_size=params['context_length'],
             n_layer=params['n_commit_layer'],
             do_commit=True,
-            max_timestep=max_timestep,
+            sub_pos=False if 'sub_pos' not in params.keys() else params['sub_pos'],
+            max_timestep=max_timestep
         )
     else:
         commit_config = None
@@ -277,6 +284,7 @@ if __name__ == "__main__":
         vq_n_e=params['vq_n_e'],
         vq_beta=float(params['vq_beta']),
         vq_legacy=params['vq_legacy'],
+        vq_smooth=None if 'vq_smooth' not in params.keys() or params['vq_smooth'] == 'None' else float(params['vq_smooth']),
         vq_log=params['vq_log'],
         vq_kmeans_reset=params['vq_kmeans_reset'],
         vq_kmeans_step=params['vq_kmeans_step'],
@@ -298,9 +306,9 @@ if __name__ == "__main__":
         traj_label = dataset['key_label'][i_traj]
 
         t = np.zeros(shape=[1], dtype=np.int64)
-        state_hist, action_hist = [torch.from_numpy(traj_state[:1]).float()], []
+        state_hist, action_hist = [torch.from_numpy(traj_state[:1]).float()], [torch.from_numpy(traj_action[:1]).float()]
 
-        for step in range(traj_action.shape[0]):
+        for step in range(traj_action.shape[0] - 1):
             print('step #', step, end=' ')
             indices = predict(
                 model=autocot_model,
@@ -311,9 +319,9 @@ if __name__ == "__main__":
             print(indices.item(), traj_label[step])
 
             # update...
-            if len(state_hist) == autocot_model.key_net.block_size:
-                print(f'len(state_hist) reach context length{autocot_model.key_net.block_size}')
-                assert len(action_hist) == autocot_model.key_net.block_size - 1
+            if len(state_hist) == autocot_model.key_net.block_size // 2:
+                # print(f'len(state_hist) reach context length{autocot_model.key_net.block_size}')
+                assert len(action_hist) == (autocot_model.key_net.block_size // 2)
                 state_hist = state_hist[1:] + [torch.from_numpy(traj_state[step + 1:step + 2]).float()]
                 action_hist = action_hist[1:] + [torch.from_numpy(traj_action[step: step + 1]).float()]
                 t += 1

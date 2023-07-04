@@ -55,7 +55,7 @@ class VQ2Linear(nn.Module):
             return z_q, loss, min_encoding_indices, None
 
 class VQ2(nn.Module):
-    def __init__(self, n_e, e_dim, beta, legacy=False, log_choice=True):
+    def __init__(self, n_e, e_dim, beta, legacy=False, c_smooth=None, log_choice=True):
         super().__init__()
         self.n_e = n_e
         self.e_dim = e_dim
@@ -66,6 +66,8 @@ class VQ2(nn.Module):
 
         self.embedding = nn.Embedding(self.n_e, self.e_dim)
         self.embedding.weight.data.uniform_(-1.0 / self.n_e, 1.0 / self.n_e)
+
+        self.c_smooth = c_smooth
 
     def forward(self, z, flatten_in=False, flatten_out=False):
         # z shape (bs, T, e_dim)
@@ -93,8 +95,12 @@ class VQ2(nn.Module):
             loss = torch.mean((z_q.detach() - z) ** 2) + self.beta * \
                    torch.mean((z_q - z.detach()) ** 2)
 
-        # preserve gradients
-        z_q = z + (z_q - z).detach()
+        # preserve gradients & smooth it
+        if self.c_smooth is not None:
+            z_q = z + (1.0 - self.c_smooth) * (z_q - z).detach()
+        else:
+            z_q = z + (z_q - z).detach()
+
         z_q = z_q.contiguous()
 
         if flatten_out is False:

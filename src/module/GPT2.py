@@ -37,49 +37,6 @@ class GELU(nn.Module):
         return F.gelu(input)
 
 
-class GPTConfig:
-    """ base GPT config, params common to all GPT versions """
-
-    embd_pdrop = 0.0
-    resid_pdrop = 0.0
-    attn_pdrop = 0.0
-
-    def __init__(self, block_size, **kwargs):
-        assert kwargs['model_type'] in ['s', 's+a', 's+cot', 's+a+cot'], \
-            f"Unsupported model_type: {kwargs['model_type']}"
-
-        if '+a' in kwargs['model_type']:  # If the action history is used.
-            self.block_size = block_size * 2
-        else:
-            self.block_size = block_size
-
-        if 'cot' in kwargs['model_type']:
-            # `key_states` specifies which of the key states should be used for CoT.
-            assert 'key_states' in kwargs, 'Should specify `key_states`'
-            # It is in the form of 'acd...' that represents whether the key
-            # state x is used. e.g., here a,c,d is used while b is skipped.
-            assert kwargs['key_states'] not in ['', None] and \
-                   np.all([ord('z') >= ord(g) >= ord('a') for g in kwargs['key_states']])
-
-            # `key_state_loss` specifies which layer's features in GPT should be used
-            # for for the auxiliary key state prediction losses.
-            assert 'key_state_loss' in kwargs, 'Should specify `key_state_loss`'
-            # It is in the form of e.g., '023', meaning the features out of attention
-            # layers of idx 0, 2, 3 are used for key state prediction losses.
-            assert kwargs['key_state_loss'] not in ['', None] and \
-                   np.all([l.isnumeric() for l in kwargs['key_state_loss']])
-
-            self.key_states = kwargs['key_states']
-            self.key_state_loss = kwargs['key_state_loss']
-            self.len_key_states = len(kwargs['key_states'])
-        else:
-            self.len_key_states = 0
-
-        # Set up other attributes.
-        for k, v in kwargs.items():
-            setattr(self, k, v)
-
-
 class BasicCausalSelfAttention(nn.Module):
     """
     A basic multi-head masked self-attention layer
@@ -152,9 +109,13 @@ class ActCausalSelfAttention(nn.Module):
         # causal mask to ensure that attention is only applied to the left in the input sequence
         block_size = config.block_size * 3
 
+        # action can choose to use only k(t-1) or k[0:t-1]
         # It is a tricky mask, see docs for more details
         mask1 = torch.repeat_interleave(torch.tril(torch.ones(config.block_size, config.block_size)), 3, dim=0)
-        mask2 = torch.eye(config.block_size)
+        if config.seq_k is True:
+            mask2 = torch.tril(torch.ones(config.block_size, config.block_size))
+        else:
+            mask2 = torch.eye(config.block_size)
         mask = torch.zeros(size=(block_size, block_size))
         mask[:, ::3] = mask1
         mask[1::3, 1::3] = mask2
@@ -230,8 +191,7 @@ class BlockLayers(nn.Module):
         self.n_head = config.n_head
 
     def forward(self, x):
-        B, T, _ = x.shape
-
+        # B, T, _ = x.shape
         output = []  # Also keep the intermediate results.
 
         for block in self.block_list:
@@ -263,6 +223,7 @@ class BasicNet(nn.Module):
         self.block_size = config.block_size * 2  # state + action
 
         self.do_commit = config.do_commit  # if True, label will be predicted here
+        self.sub_pos = config.sub_pos  # if True, we will subtract pos embedding for key prediction
 
         self.local_pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
         self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep, config.n_embd))
@@ -326,11 +287,12 @@ class BasicNet(nn.Module):
         global_pos_emb = torch.repeat_interleave(self.global_pos_emb, B, dim=0)
         timesteps_rp = torch.repeat_interleave(timesteps[:, None], self.config.n_embd, dim=-1)
         global_pos_emb = torch.gather(global_pos_emb, 1, timesteps_rp.long())  # BS x 1 x D
-        # verify here!!!
 
         local_pos_emb = torch.repeat_interleave(self.local_pos_emb[:, :T, :], 2, dim=1)
 
-        x = token_embeddings + global_pos_emb + local_pos_emb
+        pos_emb = global_pos_emb + local_pos_emb
+
+        x = token_embeddings + pos_emb
 
         key_emb = self.drop(x)
         key_emb, _ = self.blocks(key_emb)
@@ -340,14 +302,17 @@ class BasicNet(nn.Module):
 
         # do you need to minus the global & loacl embedding here???
 
-        key_soft = key_emb[:, 1:(2*T+1):2, :]
+        key_soft = key_emb[:, 1:(2*T):2, :]
+        if self.sub_pos:
+            key_soft = key_soft - pos_emb[:, 1:(2*T):2, :]
 
         # Return: key_soft, key_commit
         if self.do_commit is False:
             return key_soft, None
         else:
             key_commit_soft = key_emb[:, 0:(2*T):2, :]
-            # print('key_soft shape:', key_soft.shape, 'key_commit_soft shape:', key_commit_soft.shape)
+            if self.sub_pos:
+                key_commit_soft = key_commit_soft - pos_emb[:, 0:(2*T):2, :]
             return key_soft, key_commit_soft
 
 
@@ -369,6 +334,7 @@ class ActNet(nn.Module):
         self.block_size = config.block_size * 3
 
         self.do_commit = config.do_commit
+        self.sub_pos = config.sub_pos  # if True, we will subtract pos embedding for key prediction
 
         self.local_pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
         self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep, config.n_embd))
@@ -393,9 +359,7 @@ class ActNet(nn.Module):
         if config.do_commit:
             self.key_predictor = MLP(config.n_embd, config.n_embd, hidden_dims=[256, 256])
 
-        # print('init module in ActNet')
         self.apply(self._init_weights)
-        # print('init module in ActNet done')
 
     def _init_weights(self, module):
         # print(module)
@@ -413,10 +377,10 @@ class ActNet(nn.Module):
 
         token_embeddings = torch.zeros([B, T*3, self.config.n_embd], dtype=torch.float32, device=states.device)
 
-        token_embeddings[:, :(T*3):3, :] = state_embeddings
+        token_embeddings[:, 0:(T*3):3, :] = state_embeddings
         if key_hard is not None:   # training
             key_embeddings = self.key_encoder(key_hard)
-            token_embeddings[:, 1:(T*3+1):3, :] = key_embeddings
+            token_embeddings[:, 1:(T*3):3, :] = key_embeddings
         # else your are trying to label k(t-1)
 
         if actions is not None:  # actions is None when at s0
@@ -430,7 +394,8 @@ class ActNet(nn.Module):
 
         local_pos_emb = torch.repeat_interleave(self.local_pos_emb[:, :T, :], 3, dim=1)
 
-        x = token_embeddings + global_pos_emb + local_pos_emb
+        pos_emb = global_pos_emb + local_pos_emb
+        x = token_embeddings + pos_emb
 
         x = self.drop(x)
         x, _ = self.blocks(x)
@@ -440,6 +405,8 @@ class ActNet(nn.Module):
             # labeling, make sure you use commitment, return keys
             assert self.do_commit is True
             key_commit_soft = self.key_predictor(x[:, 0:(T*3):3, :])
+            if self.sub_pos:
+                key_commit_soft = key_commit_soft - pos_emb[:, 0:(T*3):3, :]
             return None, key_commit_soft
         else:
             # training, always need to return prediction of action
@@ -448,4 +415,6 @@ class ActNet(nn.Module):
                 return act_preds, None
             else:
                 key_commit_soft = self.key_predictor(x[:, 0:(T*3):3, :])
+                if self.sub_pos:
+                    key_commit_soft = key_commit_soft - pos_emb[:, 0:(T * 3):3, :]
                 return act_preds, key_commit_soft

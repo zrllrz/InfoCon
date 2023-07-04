@@ -47,6 +47,8 @@ def parse_args():
     parser.add_argument("--n_embd", default=128, type=int, help="Hidden feature dimension.")
 
     # Hyper-parameters regarding key_net, key_book, act_net, commit_net
+    parser.add_argument("--sub_pos", type=bool, default=False,
+                        help="Whether to subtract pos embedding from key prediction or not")
     parser.add_argument("--n_key_layer", default=4, type=int,
                         help="Number of attention layers in KeyNet")
 
@@ -56,6 +58,8 @@ def parse_args():
                         help="Coefficient in the VQ loss")
     parser.add_argument('--vq_legacy', type=bool, default=False,
                         help="Place that add vq_beta, should always be False")
+    parser.add_argument('--vq_smooth', type=str, default='None',
+                        help="smooth vq output, a float in (0, 1) or None if do not use it")
     parser.add_argument('--vq_log', type=bool, default=True,
                         help="log variation of indices choice")
     parser.add_argument('--vq_kmeans_reset', type=int, default=1000,
@@ -65,6 +69,8 @@ def parse_args():
 
     parser.add_argument("--n_act_layer", default=4, type=int,
                         help="Number of attention layers in ActNet")
+    parser.add_argument("--seq_k", default=False, type=bool,
+                        help="If True, use history k to do action prediction")
 
     # commit option
     parser.add_argument("--commit", type=str, default='act',
@@ -142,6 +148,7 @@ if __name__ == "__main__":
         block_size=args.context_length,
         n_layer=args.n_key_layer,
         do_commit=(args.commit == 'key'),
+        sub_pos=args.sub_pos,
         max_timestep=train_dataset.max_steps,
     )
     act_config = ActNetConfig(
@@ -152,7 +159,9 @@ if __name__ == "__main__":
         embd_pdrop=float(args.dropout),
         block_size=args.context_length,
         n_layer=args.n_act_layer,
+        seq_k=args.seq_k,
         do_commit=(args.commit == 'act'),
+        sub_pos=args.sub_pos,
         max_timestep=train_dataset.max_steps,
     )
     if args.commit == 'independent':
@@ -165,6 +174,7 @@ if __name__ == "__main__":
             block_size=args.context_length,
             n_layer=args.n_commit_layer,
             do_commit=True,
+            sub_pos=args.sub_pos,
             max_timestep=train_dataset.max_steps,
         )
     else:
@@ -197,6 +207,7 @@ if __name__ == "__main__":
         vq_n_e=args.vq_n_e,
         vq_beta=float(args.vq_beta),
         vq_legacy=args.vq_legacy,
+        vq_smooth=None if args.vq_smooth == 'None' else float(args.vq_smooth),
         vq_log=args.vq_log,
         vq_kmeans_reset=args.vq_kmeans_reset,
         vq_kmeans_step=args.vq_kmeans_step,

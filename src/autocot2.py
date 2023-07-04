@@ -76,26 +76,29 @@ class BasicNetConfig(RootConfig):
     def __init__(self, n_embd, n_head,
                  attn_pdrop, resid_pdrop, embd_pdrop,
                  block_size, n_layer,
-                 do_commit, max_timestep):
+                 do_commit, sub_pos, max_timestep):
         super().__init__(
             n_embd, n_head,
             attn_pdrop, resid_pdrop, embd_pdrop,
             block_size, 'basic', n_layer,
             do_commit, max_timestep
         )
+        self.sub_pos = sub_pos
 
 
 class ActNetConfig(RootConfig):
     def __init__(self, n_embd, n_head,
                  attn_pdrop, resid_pdrop, embd_pdrop,
-                 block_size, n_layer,
-                 do_commit, max_timestep):
+                 block_size, n_layer, seq_k,
+                 do_commit, sub_pos, max_timestep):
         super().__init__(
             n_embd, n_head,
             attn_pdrop, resid_pdrop, embd_pdrop,
             block_size, 'act', n_layer,
             do_commit, max_timestep
         )
+        self.seq_k = seq_k
+        self.sub_pos = sub_pos
 
 
 class AutoCoT(pl.LightningModule):
@@ -107,6 +110,7 @@ class AutoCoT(pl.LightningModule):
             vq_legacy,
             act_config,
             commit_config=None,
+            vq_smooth=None,
             vq_log=True,
             vq_kmeans_reset=None,
             vq_kmeans_step=None,
@@ -154,6 +158,7 @@ class AutoCoT(pl.LightningModule):
             e_dim=key_config.n_embd,
             beta=vq_beta,
             legacy=vq_legacy,
+            c_smooth=vq_smooth,
             log_choice=vq_log
         )
 
@@ -292,27 +297,14 @@ class AutoCoT(pl.LightningModule):
         # actions: None or (T - 1, a_dim)
         # timesteps
 
-        states = states[None, ...]
-        timesteps = timesteps[None, ...]
-        if actions is not None:
-            actions = actions[None, ...]
+        # states = states[None, ...]
+        # timesteps = timesteps[None, ...]
+        # if actions is not None:
+        #     actions = actions[None, ...]
 
-        # key_commit label
-        if self.commit_type == 'independent':
-            # commit with commit_net
-            _, key_commit_soft = self.commit_net(states, timesteps, actions)
-        elif self.commit_type == 'key':
-            # using key_net
-            _, key_commit_soft = self.key_net(states, timesteps, actions)
-        elif self.commit_type == 'act':
-            # using act_net commit_ket
-            _, key_commit_soft = self.act_net(states)
-        else:
-            key_commit_soft = None
-        assert key_commit_soft is not None
-
-        _, _, label, _ = self.key_book(key_commit_soft)
-
+        # key_net label
+        key_soft, _ = self.key_net(states, timesteps, actions)
+        _, _, label, _ = self.key_book(key_soft)
         return label[:, -1]
 
     def configure_optimizers(self):
