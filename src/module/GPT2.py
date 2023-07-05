@@ -99,7 +99,7 @@ class ActCausalSelfAttention(nn.Module):
         self.query = nn.Linear(config.n_embd, config.n_embd)
         self.value = nn.Linear(config.n_embd, config.n_embd)
 
-        # regularization
+        # dropouts
         self.attn_drop = nn.Dropout(config.attn_pdrop)
         self.resid_drop = nn.Dropout(config.resid_pdrop)
 
@@ -255,10 +255,9 @@ class BasicNet(nn.Module):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
-    # Given state (and action) history, predict actions (and key states as CoT).
-    # `timesteps` is used for the global+local position embedding design similar
-    # to the one in Decision Transformer. `key_state_mask` is used so that the
-    # (all-to-all) key state query tokens can attend to later tokens.
+    # Given state and action) history, put forward possible k_soft[0:t-1]
+    # `timesteps` is used for the global+local position embedding
+    # Maybe will output commit if needed
     def forward(self, states, timesteps, actions=None):
         B, T = states.shape[0], states.shape[1]
         state_embeddings = self.state_encoder(states)
@@ -287,9 +286,7 @@ class BasicNet(nn.Module):
         global_pos_emb = torch.repeat_interleave(self.global_pos_emb, B, dim=0)
         timesteps_rp = torch.repeat_interleave(timesteps[:, None], self.config.n_embd, dim=-1)
         global_pos_emb = torch.gather(global_pos_emb, 1, timesteps_rp.long())  # BS x 1 x D
-
         local_pos_emb = torch.repeat_interleave(self.local_pos_emb[:, :T, :], 2, dim=1)
-
         pos_emb = global_pos_emb + local_pos_emb
 
         x = token_embeddings + pos_emb
@@ -297,7 +294,6 @@ class BasicNet(nn.Module):
         key_emb = self.drop(x)
         key_emb, _ = self.blocks(key_emb)
         key_emb = self.ln(key_emb)
-
         key_emb = self.key_predictor(key_emb)
 
         # do you need to minus the global & loacl embedding here???
@@ -314,6 +310,76 @@ class BasicNet(nn.Module):
             if self.sub_pos:
                 key_commit_soft = key_commit_soft - pos_emb[:, 0:(2*T):2, :]
             return key_soft, key_commit_soft
+
+
+class ExampleNet(nn.Module):
+    def __init__(self, config, state_dim=-1, action_dim=-1):
+        super().__init__()
+
+        assert state_dim > 0 and action_dim > 0
+        assert config.block_type == 'basic'
+        self.config = config
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        # self.key_dim = config.n_embd
+        self.block_size = config.block_size * 2  # keys * 2 in time dim, state + action
+
+        self.local_pos_emb = nn.Parameter(torch.zeros(1, config.block_size * 2, config.n_embd))
+        self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep, config.n_embd))
+
+        # Key predictor
+        self.key_encoder = MLP(config.n_embd, config.n_embd, hidden_dims=[256])
+
+        # embedding dropout
+        self.drop = nn.Dropout(config.embd_pdrop)
+
+        # Transformer (attention layers)
+        self.blocks = BlockLayers(config)
+        self.ln = nn.LayerNorm(config.n_embd)
+
+        # State embeddings & Action embeddings
+        self.state_predictor = MLP(config.n_embd, state_dim, hidden_dims=[256, 256])
+        self.action_predictor = MLP(config.n_embd, action_dim, hidden_dims=[256, 256])
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+            if isinstance(module, nn.Linear) and module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
+
+    # Given keys, reconstruction states and actions
+    # The process is like when you have a set of method
+    # you can put forward a situation using it
+    def forward(self, key_hard, timesteps):
+        B, T = key_hard.shape[0], key_hard.shape[1]
+        key_embeddings = self.key_encoder(key_hard)
+
+        # Token embeddings (B, T*2, n_embd)
+        token_embeddings = torch.repeat_interleave(key_embeddings, 2, dim=1)
+
+        # Set up position embeddings.
+        global_pos_emb = torch.repeat_interleave(self.global_pos_emb, B, dim=0)
+        timesteps_rp = torch.repeat_interleave(timesteps[:, None], self.config.n_embd, dim=-1)
+        global_pos_emb = torch.gather(global_pos_emb, 1, timesteps_rp.long())  # BS x 1 x D
+
+        pos_emb = global_pos_emb + self.local_pos_emb
+        x = token_embeddings + pos_emb
+
+        x = self.drop(x)
+        x, _ = self.blocks(x)
+        sa = self.ln(x)
+        state_preds = self.state_predictor(sa[:, 0:T*2:2, :])
+        if T > 1:
+            act_preds = self.action_predictor(sa[:, 1:T*2-1:2, :])
+        else:
+            act_preds = None
+
+        return state_preds, act_preds
 
 
 class ActNet(nn.Module):
@@ -340,8 +406,8 @@ class ActNet(nn.Module):
         self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep, config.n_embd))
 
         # State embeddings & Action embeddings & Key embeddings
-        self.state_encoder = MLP(self.state_dim, config.n_embd, hidden_dims=[256])
-        self.action_encoder = MLP(self.action_dim, config.n_embd, hidden_dims=[256])
+        self.state_encoder = MLP(state_dim, config.n_embd, hidden_dims=[256])
+        self.action_encoder = MLP(action_dim, config.n_embd, hidden_dims=[256])
         self.key_encoder = MLP(config.n_embd, config.n_embd, hidden_dims=[256])
 
         # embedding dropout
@@ -349,7 +415,6 @@ class ActNet(nn.Module):
 
         # Transformer (attention layers)
         self.blocks = BlockLayers(config)
-
         self.ln = nn.LayerNorm(config.n_embd)
 
         # Action predictor
@@ -385,13 +450,12 @@ class ActNet(nn.Module):
 
         if actions is not None:  # actions is None when at s0
             # the last action is not used as inputs during ActNet training.
-            token_embeddings[:, 2:(T*3-1):3, :] = self.action_encoder(actions[:, :(T - 1)])
+            token_embeddings[:, 2:(T*3-1):3, :] = self.action_encoder(actions[:, :(T-1)])
 
         # Set up position embeddings similar to that in Decision Transformer.
         global_pos_emb = torch.repeat_interleave(self.global_pos_emb, B, dim=0)
         timesteps_rp = torch.repeat_interleave(timesteps[:, None], self.config.n_embd, dim=-1)
         global_pos_emb = torch.gather(global_pos_emb, 1, timesteps_rp.long())  # BS x 1 x D
-
         local_pos_emb = torch.repeat_interleave(self.local_pos_emb[:, :T, :], 3, dim=1)
 
         pos_emb = global_pos_emb + local_pos_emb

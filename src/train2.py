@@ -12,6 +12,7 @@ from data import MS2Demos, get_padding_fn
 from autocot2 import (
     BasicNetConfig,
     ActNetConfig,
+    ExampleNetConfig,
     AutoCoT
 )
 from lr_scheduler import CosineAnnealingLRWarmup
@@ -72,9 +73,16 @@ def parse_args():
     parser.add_argument("--seq_k", default=False, type=bool,
                         help="If True, use history k to do action prediction")
 
+    # example option
+    parser.add_argument("--coe_example", default='0.0', type=str,
+                        help="coefficient of example_net, if 0.0 we do not use example_net"
+                             "if >= 1.0, we should not use commit_net")
+    parser.add_argument("--n_example_layer", default=4, type=int,
+                        help="Number of attention layers in ExampleNet")
+
     # commit option
-    parser.add_argument("--commit", type=str, default='act',
-                        help="Methods for commitment key prediction: independent, key, act")
+    parser.add_argument("--commit", type=str, default='none',
+                        help="Methods for commitment key prediction: none independent, key, act")
     parser.add_argument("--n_commit_layer", default=4, type=int,
                         help="Number of attention layers in commit_net, if use it")
 
@@ -180,6 +188,20 @@ if __name__ == "__main__":
     else:
         commit_config = None
 
+    if float(args.coe_example) > 0.0:
+        example_config = ExampleNetConfig(
+            n_embd=args.n_embd,
+            n_head=args.n_head,
+            attn_pdrop=float(args.dropout),
+            resid_pdrop=float(args.dropout),
+            embd_pdrop=float(args.dropout),
+            block_size=args.context_length,
+            n_layer=args.n_example_layer,
+            max_timestep=train_dataset.max_steps,
+        )
+    else:
+        example_config = None
+
     optimizer_config = {
         'init_lr': float(args.init_lr),
         'weight_decay': float(args.weight_decay),
@@ -212,6 +234,8 @@ if __name__ == "__main__":
         vq_kmeans_reset=args.vq_kmeans_reset,
         vq_kmeans_step=args.vq_kmeans_step,
         act_config=act_config,
+        coe_example=float(args.coe_example),
+        example_config=example_config,
         commit_config=commit_config,
         optimizers_config=optimizer_config,
         scheduler_config=scheduler_config,

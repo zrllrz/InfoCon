@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 
 from module.VQ import VQ2
-from module.GPT2 import BasicNet, ActNet
+from module.GPT2 import BasicNet, ActNet, ExampleNet
 
 import pytorch_lightning as pl
 
@@ -31,7 +31,7 @@ def get_loss(preds, targets, lengths):
     max_len = torch.max(lengths)  # Max length of the current mini-batch.
     lengths = lengths[:, None]  # B x 1
     temp = torch.arange(0, max_len)[None].expand(B, -1).cuda()  # B x max_len
-    masks = (temp < lengths.expand(B, max_len)).float() # B x max_len
+    masks = (temp < lengths.expand(B, max_len)).float()  # B x max_len
 
     loss = mse_loss_with_weights(
         preds.reshape(-1, preds.size(-1)),
@@ -101,6 +101,18 @@ class ActNetConfig(RootConfig):
         self.sub_pos = sub_pos
 
 
+class ExampleNetConfig(RootConfig):
+    def __init__(self, n_embd, n_head,
+                 attn_pdrop, resid_pdrop, embd_pdrop,
+                 block_size, n_layer, max_timestep):
+        super().__init__(
+            n_embd, n_head,
+            attn_pdrop, resid_pdrop, embd_pdrop,
+            block_size, 'basic', n_layer,
+            do_commit=False, max_timestep=max_timestep
+        )
+
+
 class AutoCoT(pl.LightningModule):
     def __init__(
             self,
@@ -110,6 +122,8 @@ class AutoCoT(pl.LightningModule):
             vq_legacy,
             act_config,
             commit_config=None,
+            coe_example=0.0,
+            example_config=None,
             vq_smooth=None,
             vq_log=True,
             vq_kmeans_reset=None,
@@ -132,14 +146,14 @@ class AutoCoT(pl.LightningModule):
         use_commitnet = commit_config is not None
         assert (use_keynet_commit and not use_actnet_commit and not use_commitnet) \
                or (not use_keynet_commit and use_actnet_commit and not use_commitnet) \
-               or (not use_keynet_commit and not use_actnet_commit and use_commitnet)
+               or (not use_keynet_commit and not use_actnet_commit and use_commitnet) \
+               or (not use_keynet_commit and not use_actnet_commit and not use_commitnet)
 
         # When you use a indenpendent net to do commit, make sure do_commit is True
         if use_commitnet:
             assert commit_config.do_commit is True
 
         assert state_dim > 0 and action_dim > 0
-
         self.n_embd = key_config.n_embd
 
         # key_net, use for latent key predict
@@ -158,17 +172,15 @@ class AutoCoT(pl.LightningModule):
             e_dim=key_config.n_embd,
             beta=vq_beta,
             legacy=vq_legacy,
-            c_smooth=vq_smooth,
             log_choice=vq_log
         )
-
+        self.vq_smooth = vq_smooth
         if vq_kmeans_reset is not None:
             assert isinstance(vq_kmeans_reset, int)
             assert isinstance(vq_kmeans_step, int)
             self.kmeans_idx = 0
             self.vq_kmeans_reset = vq_kmeans_reset
             self.vq_kmeans_step = vq_kmeans_step
-
         else:
             self.kmeans_idx = None
             self.vq_kmeans_reset = None
@@ -198,7 +210,20 @@ class AutoCoT(pl.LightningModule):
         elif use_keynet_commit:
             self.commit_type = 'key'
         else:
-            print("#### should not reach here ####")
+            self.commit_type = 'none'
+        assert self.use_soft_commit_loss is False
+
+        if coe_example > 0.0:
+            assert example_config is not None
+            if coe_example >= 1.0:
+                assert self.commit_type == 'none'
+            # use example_net to reconstruct k[0:t-1] to s[0:t-1], a[0:t-2]
+            self.coe_example = coe_example
+            self.example_net = ExampleNet(
+                config=example_config,
+                state_dim=state_dim,
+                action_dim=action_dim
+            )
 
         # flag_collapse: use for record whether we are in 'index collapse' situation
         self.flag_collapse = False
@@ -235,10 +260,11 @@ class AutoCoT(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         states, timesteps, actions, lengths = batch['s'], batch['t'], batch['a'], batch['lengths']
+        T = states.shape[1]
 
         # Latent encoding
-        # from s[0:T-1], a[0:T-1] get k[0:T-1]
-        # if commit, from s[0:T-1], a[0:T-2] get k[0:T-1]
+        # from s[0:T-1], a[0:T-1] get key_soft[0:T-1]
+        # if commit, from s[0:T-1], a[0:T-2] get kcs_key_net[0:T-1]
         key_soft, kcs_key_net = self.key_net(states, timesteps, actions)
 
         # VQ mapping
@@ -249,13 +275,32 @@ class AutoCoT(pl.LightningModule):
         elif var != 0 and self.flag_collapse is True:
             self.flag_collapse = False
 
-        # Reconstruction
+        if self.coe_example > 0.0:
+            # reconstruction from key_hard to s[0:t-1], a[0:t-2]
+            if self.vq_smooth is not None:
+                key_smooth = (1.0 - self.vq_smooth) * key_hard + self.vq_smooth * key_soft
+            else:
+                key_smooth = key_hard
+            state_recs, act_recs = self.example_net(key_smooth, timesteps)
+            loss_recs_state = get_loss(state_recs, states, lengths)
+            if act_recs is not None:
+                loss_recs_action = get_loss(act_recs, actions[:, 0:(T-1)], lengths - 1)
+            else:
+                loss_recs_action = 0.0
+            loss_recs = loss_recs_state + loss_recs_action
+        else:
+            loss_recs = 0.0
+
+        # action based on k_hard[0:T-1]
         # from s[0:T-1], a[0:T-2], k_hard[0:T-1] get a[0:T-1]
         # if commit, from s[0:T-1], a[0:T-2] get k[0:T-1]
         act_preds, kcs_act_net = self.act_net(states, timesteps, actions, key_hard)
 
         # commitment
-        if self.commit_type == 'independent':
+        if self.commit_type == 'none':
+            # do not train commit_net
+            key_commit_soft = None
+        elif self.commit_type == 'independent':
             # commit with commit_net
             _, key_commit_soft = self.commit_net(states, timesteps, actions)
         elif self.commit_type == 'key':
@@ -265,22 +310,26 @@ class AutoCoT(pl.LightningModule):
             # using act_net commit_ket
             key_commit_soft = kcs_act_net
         else:
-            key_commit_soft = None
-        assert key_commit_soft is not None
+            print('should not reach here')
+            assert False
 
-        # loss: reconstruction
-        loss_rec = get_loss(act_preds, actions, lengths)
+        # loss: prediction
+        loss_preds = get_loss(act_preds, actions, lengths)
         # loss: commitment
-        loss_commitment = torch.mean((key_commit_soft - key_hard.detach()) ** 2) + \
-                          self.key_book.beta * torch.mean((key_commit_soft.detach() - key_hard) ** 2)
-        assert self.use_soft_commit_loss is False
-        loss = loss_rec + loss_commitment + loss_dict
+        if key_commit_soft is not None:
+            loss_commitment = torch.mean((key_commit_soft - key_hard.detach()) ** 2) + \
+                              self.key_book.beta * torch.mean((key_commit_soft.detach() - key_hard) ** 2)
+        else:
+            loss_commitment = 0.0
+
+        loss = loss_preds + self.coe_example * loss_recs + (1.0 - self.coe_example) * loss_commitment + loss_dict
 
         # log the loss-es
         self.log_dict(
             {
                 'loss': loss,
-                'loss_rec': loss_rec,
+                'loss_preds': loss_preds,
+                'loss_recs': loss_recs,
                 'loss_commitment': loss_commitment,
                 'loss_dict': loss_dict
             }, prog_bar=True, on_step=True, on_epoch=True
@@ -340,6 +389,9 @@ class AutoCoT(pl.LightningModule):
         if self.commit_type == 'independent':
             no_decay.add('commit_net.local_pos_emb')
             no_decay.add('commit_net.global_pos_emb')
+        if self.coe_example > 0.0:
+            no_decay.add('example_net.local_pos_emb')
+            no_decay.add('example_net.global_pos_emb')
 
         # validate that we considered every parameter
         param_dict = {pn: p for pn, p in self.named_parameters()}

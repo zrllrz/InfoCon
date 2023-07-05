@@ -12,12 +12,14 @@ import torch
 from autocot2 import (
     BasicNetConfig,
     ActNetConfig,
+    ExampleNetConfig,
     AutoCoT
 )
 
 from vec_env import get_mp_envs  # Used for parallel evaluation.
 
 from path import MODEL_PATH, DATA_PATH
+
 
 @torch.no_grad()
 def predict(model, action_hist, state_hist, t):
@@ -39,18 +41,18 @@ def predict(model, action_hist, state_hist, t):
     return indices
 
 
-def update(model, action_hist, state_hist, actions, states, t):
-    # A function used to update the state and action history.
-    actions = torch.from_numpy(actions)
-    if len(state_hist) == model.key_net.block_size // 2:  # The context buffer is full.
-        assert len(action_hist) == model.key_net.block_size // 2 - 1
-        state_hist = state_hist[1:] + [states]
-        action_hist = action_hist[1:] + [actions]
-        t += 1
-    else:
-        state_hist.append(states)
-        action_hist.append(actions)
-    return action_hist, state_hist, t
+# def update(model, action_hist, state_hist, actions, states, t):
+#     # A function used to update the state and action history.
+#     actions = torch.from_numpy(actions)
+#     if len(state_hist) == model.key_net.block_size // 2:  # The context buffer is full.
+#         assert len(action_hist) == model.key_net.block_size // 2 - 1
+#         state_hist = state_hist[1:] + [states]
+#         action_hist = action_hist[1:] + [actions]
+#         t += 1
+#     else:
+#         state_hist.append(states)
+#         action_hist.append(actions)
+#     return action_hist, state_hist, t
 
 
 def parse_args():
@@ -129,13 +131,12 @@ if __name__ == "__main__":
     print(dataset['env_states'][0].shape[0])
 
     dataset['key_label'] = [[None for j in range(dataset['env_states'][idx].shape[0])] for idx in range(length)]
-    print(dataset['key_label'][0])
 
     max_steps = np.max(len(s) for s in dataset['env_states'])
 
-    print(dataset['env_states'][0].shape, type(dataset['env_states'][0]))
-    print(dataset['obs'][0].shape, type(dataset['obs'][0]))
-    print(dataset['actions'][0].shape, type(dataset['actions'][0]))
+    # print(dataset['env_states'][0].shape, type(dataset['env_states'][0]))
+    # print(dataset['obs'][0].shape, type(dataset['obs'][0]))
+    # print(dataset['actions'][0].shape, type(dataset['actions'][0]))
 
     for k in traj_all['traj_0']['infos'].keys():
         dataset[f'infos/{k}'] = [np.array(
@@ -278,6 +279,21 @@ if __name__ == "__main__":
         )
     else:
         commit_config = None
+    if 'coe_example' in params.keys() and float(params['coe_example']) > 0.0:
+        example_config = ExampleNetConfig(
+            n_embd=params['n_embd'],
+            n_head=params['n_head'],
+            attn_pdrop=float(params['dropout']),
+            resid_pdrop=float(params['dropout']),
+            embd_pdrop=float(params['dropout']),
+            block_size=params['context_length'],
+            n_layer=params['n_example_layer'],
+            max_timestep=max_timestep,
+        )
+        coe_example = params['coe_example']
+    else:
+        example_config = None
+        coe_example = 0.0
 
     autocot_model = AutoCoT(
         key_config=key_config,
@@ -289,6 +305,8 @@ if __name__ == "__main__":
         vq_kmeans_reset=params['vq_kmeans_reset'],
         vq_kmeans_step=params['vq_kmeans_step'],
         act_config=act_config,
+        coe_example=coe_example,
+        example_config=example_config,
         commit_config=commit_config,
         optimizers_config=None,
         scheduler_config=None,
