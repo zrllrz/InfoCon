@@ -130,7 +130,9 @@ if __name__ == "__main__":
 
     print(dataset['env_states'][0].shape[0])
 
-    dataset['key_label'] = [[None for j in range(dataset['env_states'][idx].shape[0])] for idx in range(length)]
+    # dataset['key_label'] = [[None for j in range(dataset['env_states'][idx].shape[0])] for idx in range(length)]
+    # dataset['key_states_gt'] = list()
+    key_states_gts = list()
 
     max_steps = np.max(len(s) for s in dataset['env_states'])
 
@@ -151,14 +153,13 @@ if __name__ == "__main__":
     # key state II: end of the trajectory
     if args.task == 'TurnFaucet-v0':
         for idx in range(length):
-            # print(f'traj_{idx}')
+            key_states_gt = list()
             for step_idx, key in enumerate(dataset['infos/is_contacted'][idx]):
-                if dataset['key_label'][idx][step_idx] is None:
-                    dataset['key_label'][idx][step_idx] = 'is_contacted'
-                if key: break
-            for step_idx in range(dataset['env_states'][idx].shape[0]):
-                if dataset['key_label'][idx][step_idx] is None:
-                    dataset['key_label'][idx][step_idx] = 'end'
+                if key:
+                    key_states_gt.append(('is_contacted', step_idx))
+                    break
+            key_states_gt.append(('end', dataset['env_states'][idx].shape[0] - 1))
+            key_states_gts.append(key_states_gt)
 
     # If PegInsertion (three key states)
     # key state I: is_grasped -> true
@@ -166,31 +167,30 @@ if __name__ == "__main__":
     # key state III: end of the trajectory
     if args.task == 'PegInsertionSide-v0':
         for idx in range(length):
+            key_states_gt = list()
             for step_idx, key in enumerate(dataset['infos/is_grasped'][idx]):
-                if dataset['key_label'][idx][step_idx] is None:
-                    dataset['key_label'][idx][step_idx] = 'is_grasped'
-                if key: break
+                if key:
+                    key_states_gt.append(('is_grasped', step_idx))
+                    break
             for step_idx, key in enumerate(dataset['infos/pre_inserted'][idx]):
-                # print(f'{step_idx}\t{key}')
-                if dataset['key_label'][idx][step_idx] is None:
-                    dataset['key_label'][idx][step_idx] = 'pre_inserted'
-                if key: break
-            for step_idx in range(dataset['env_states'][idx].shape[0]):
-                if dataset['key_label'][idx][step_idx] is None:
-                    dataset['key_label'][idx][step_idx] = 'end'
+                if key:
+                    key_states_gt.append(('pre_inserted', step_idx))
+                    break
+            key_states_gt.append(('end', dataset['env_states'][idx].shape[0] - 1))
+            key_states_gts.append(key_states_gt)
 
     # If PickCube (two key states)
     # key state I: is_grasped -> true
     # key state II: end of the trajectory
     if args.task == 'PickCube-v0':
         for idx in range(length):
+            key_states_gt = list()
             for step_idx, key in enumerate(dataset['infos/is_grasped'][idx]):
-                if dataset['key_label'][idx][step_idx] is None:
-                    dataset['key_label'][idx][step_idx] = 'is_grasped'
-                if key: break
-            for step_idx in range(dataset['env_states'][idx].shape[0]):
-                if dataset['key_label'][idx][step_idx] is None:
-                    dataset['key_label'][idx][step_idx] = 'end'
+                if key:
+                    key_states_gt.append(('is_grasped', step_idx))
+                    break
+            key_states_gt.append(('end', dataset['env_states'][idx].shape[0] - 1))
+            key_states_gts.append(key_states_gt)
 
     # If StackCube (three key states)
     # key state I: is_cubaA_grasped -> true
@@ -199,18 +199,18 @@ if __name__ == "__main__":
     # key state III: end of the trajectory
     if args.task == 'StackCube-v0':
         for idx in range(length):
+            key_states_gt = list()
             for step_idx, key in enumerate(dataset['infos/is_cubaA_grasped'][idx]):
-                if dataset['key_label'][idx][step_idx] is None:
-                    dataset['key_label'][idx][step_idx] = 'is_cubaA_grasped'
-                if key: break
+                if key:
+                    key_states_gt.append(('is_cubaA_grasped', step_idx))
+                    break
             for step_idx, k1 in enumerate(dataset['infos/is_cubeA_on_cubeB'][idx]):
                 k2 = dataset['infos/is_cubaA_grasped'][idx][step_idx]
-                if dataset['key_label'][idx][step_idx] is None:
-                    dataset['key_label'][idx][step_idx] = 'is_cubeA_on_cubeB'
-                if k1 and not k2: break
-            for step_idx in range(dataset['env_states'][idx].shape[0]):
-                if dataset['key_label'][idx][step_idx] is None:
-                    dataset['key_label'][idx][step_idx] = 'end'
+                if k1 and not k2:
+                    key_states_gt.append(('is_cubeA_on_cubeB', step_idx))
+                    break
+            key_states_gt.append(('end', dataset['env_states'][idx].shape[0] - 1))
+            key_states_gts.append(key_states_gt)
 
     # If PushChair (four key states):
     # key state I: right before demo_rotate -> true
@@ -220,23 +220,26 @@ if __name__ == "__main__":
     # In PushChair, demo_* indicate the current state (not the next).
     if args.task == 'PushChair-v1':
         for idx in range(length):
+            key_states_gt = list()
             for step_idx, key in enumerate(dataset['infos/demo_rotate'][idx]):
-                if dataset['key_label'][idx][step_idx] is None:
-                    dataset['key_label'][idx][step_idx] = 'demo_rotate'
-                if key: break
+                if key:
+                    key_states_gt.append(('demo_rotate', step_idx))
+                    break
             for step_idx, key in enumerate(dataset['infos/demo_move'][idx]):
-                if dataset['key_label'][idx][step_idx] is None:
-                    dataset['key_label'][idx][step_idx] = 'demo_move'
-                if key: break
+                if key:
+                    key_states_gt.append(('demo_move', step_idx))
+                    break
             for step_idx, key in enumerate(np.bitwise_and(dataset['infos/chair_close_to_target'][idx],
                                                           dataset['infos/chair_standing'][idx])):
-                if dataset['key_label'][idx][step_idx] is None:
-                    dataset['key_label'][idx][step_idx] = 'chair_close_to_target_and_chair_standing'
-                if key: break
-            for step_idx in range(dataset['env_states'][idx].shape[0]):
-                if dataset['key_label'][idx][step_idx] is None:
-                    dataset['key_label'][idx][step_idx] = 'end'
+                if key:
+                    key_states_gt.append(('chair_close_to_target(chair_standing)', step_idx))
+                    break
+            key_states_gt.append(('end', dataset['env_states'][idx].shape[0] - 1))
+            key_states_gts.append(key_states_gt)
 
+    for ksgt in key_states_gts:
+        for i, ks in enumerate(ksgt):
+            print(f'#{i}', ks[0], ks[1])
 
     # config our net
     key_config = BasicNetConfig(
@@ -290,10 +293,11 @@ if __name__ == "__main__":
             n_layer=params['n_example_layer'],
             max_timestep=max_timestep,
         )
-        coe_example = params['coe_example']
+        coe_example = float(params['coe_example'])
     else:
         example_config = None
         coe_example = 0.0
+    print('coe_example =', coe_example)
 
     autocot_model = AutoCoT(
         key_config=key_config,
@@ -321,20 +325,36 @@ if __name__ == "__main__":
     for i_traj in range(length):
         traj_state = dataset['obs'][i_traj]
         traj_action = dataset['actions'][i_traj]
-        traj_label = dataset['key_label'][i_traj]
+        key_states_gt = key_states_gts[i_traj]
 
         t = np.zeros(shape=[1], dtype=np.int64)
         state_hist, action_hist = [torch.from_numpy(traj_state[:1]).float()], [torch.from_numpy(traj_action[:1]).float()]
 
+        current_label = -1
+        i_begin = 0
+        i_gt = 0
+
         for step in range(traj_action.shape[0] - 1):
-            print('step #', step, end=' ')
+            # print('step #', step, end=' ')
             indices = predict(
                 model=autocot_model,
                 action_hist=action_hist,
                 state_hist=state_hist,
                 t=t,
             )
-            print(indices.item(), traj_label[step])
+            # print(indices.item(), traj_label[step])
+            indices_item = indices.item()
+
+            # Label output
+            if indices_item != current_label:
+                if current_label != -1:
+                    print(f'key {current_label}\t[{i_begin}, {step - 1}]', end='')
+                    if i_begin <= key_states_gt[i_gt][1] <= step - 1:
+                        print(f'\tgt key states', key_states_gt[i_gt][1], key_states_gt[i_gt][0], end='')
+                        i_gt += 1
+                    print()
+                current_label = indices_item
+                i_begin = step
 
             # update...
             if len(state_hist) == autocot_model.key_net.block_size // 2:
@@ -346,4 +366,6 @@ if __name__ == "__main__":
             else:
                 state_hist.append(torch.from_numpy(traj_state[step + 1:step + 2]).float())
                 action_hist.append(torch.from_numpy(traj_action[step: step + 1]).float())
+        if current_label != -1:
+            print(f'key {current_label}\t[{i_begin}, {traj_action.shape[0] - 1}]')
         input()
