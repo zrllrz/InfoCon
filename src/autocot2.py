@@ -69,7 +69,10 @@ def init_centriods(datas, n_centriods):
         d_min = d.min(dim=1)[0] + 1e-5
         d_min = torch.where(torch.isnan(d_min), torch.zeros_like(d_min), d_min)
         d_min = torch.where(torch.isinf(d_min), torch.zeros_like(d_min), d_min)
-        if d_min.sum() == 0.0:
+        d_min = torch.where(d_min < 0.0, torch.zeros_like(d_min), d_min)
+        d_min_sum = d_min.sum()
+
+        if d_min_sum == 0.0 or torch.isnan(d_min_sum) or torch.isinf(d_min_sum):
             i = torch.randint(0, N, (1,))[0]
         else:
             i = d_min.multinomial(num_samples=1)[0]
