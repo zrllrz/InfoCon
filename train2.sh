@@ -4,7 +4,7 @@ cd src &&
 
 # Example script for PickCube training (with a good set of hyper-parameters).
 # --model_name=independent-sin_k-lay_3-10_cod-smo_None-sub \
-CUDA_VISIBLE_DEVICES=1 python train2.py \
+CUDA_VISIBLE_DEVICES=3 python train2.py \
     --n_iters=3600000 --batch_size=256 \
     --init_lr=5e-4 --weight_decay=0.001 --lr_schedule=cos_decay_with_warmup --t_warmup=1000 \
     --beta1=0.9 --beta2=0.95 \
@@ -14,9 +14,9 @@ CUDA_VISIBLE_DEVICES=1 python train2.py \
     --n_act_layer=3 --seq_k=True \
     --commit=none --n_commit_layer=3 \
     --coe_example=10.0 --n_example_layer=3 \
-    --model_name=kae-code_10-smooth_0.5-seq_k-example_1.0 \
+    --coe_reg_diff_k=0.1  --coe_reg_begin_k=0.1 \
+    --model_name=kae-code_10-smooth_0.5-seq_k-example_10.0-reg_diff_0.1_begin_0.1 \
     --task=PegInsertionSide-v0 --control_mode=pd_joint_delta_pos --obs_mode=state --seed=0 \
     --num_traj=-1 --context_length=60 --min_seq_length=60 \
     --save_every=1000 --log_every=1000 \
-    --num_workers=4 --multiplier=26
-
+    --num_workers=6 --multiplier=26

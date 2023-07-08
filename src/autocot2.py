@@ -2,6 +2,7 @@ import numpy as np
 from math import exp
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from module.VQ import VQ2
 from module.GPT2 import BasicNet, ActNet, ExampleNet
@@ -40,6 +41,22 @@ def get_loss(preds, targets, lengths):
     return loss
 
 
+def diff_cos_sim_loss(v):
+    diff_v = v[:, 1:, ...] - v[:, :-1, ...]
+    diff_v_norm = F.normalize(diff_v, p=2, dim=2)
+    diff_v_cos_sim = F.cosine_similarity(diff_v_norm[:, :-1, ...], diff_v_norm[:, 1:, ...], dim=2)
+    loss = diff_v_cos_sim.mean()
+    return loss
+
+
+def begin_cos_sim_loss(v):
+    v_begin = v[:, 1:, ...] - v[:, 0:1, ...]
+    v_begin_norm = F.normalize(v_begin, p=2, dim=2)
+    v_begin_cos_sim = F.cosine_similarity(v_begin_norm[:, :-1, ...], v_begin_norm[:, -1:, ...], dim=2)
+    loss = v_begin_cos_sim.mean()
+    return loss
+
+
 def init_centriods(datas, n_centriods):
     N, D = datas.shape
     i0 = torch.randint(0, N, (1,))[0]
@@ -48,9 +65,15 @@ def init_centriods(datas, n_centriods):
         d = torch.sum(datas ** 2, dim=1, keepdim=True) + \
             torch.sum(cent_init ** 2, dim=1) - 2 * \
             torch.einsum('bd,dn->bn', datas, rearrange(cent_init, 'n d -> d n'))
+
         d_min = d.min(dim=1)[0] + 1e-5
-        f_d_min = d_min / d_min.sum()
-        i = f_d_min.multinomial(num_samples=1)[0]
+        d_min = torch.where(torch.isnan(d_min), torch.zeros_like(d_min), d_min)
+        d_min = torch.where(torch.isinf(d_min), torch.zeros_like(d_min), d_min)
+        if d_min.sum() == 0.0:
+            i = torch.randint(0, N, (1,))[0]
+        else:
+            i = d_min.multinomial(num_samples=1)[0]
+
         cent_init = torch.cat([cent_init, datas[i][None, :]], dim=0)
     return cent_init
 
@@ -131,6 +154,8 @@ class AutoCoT(pl.LightningModule):
             use_soft_commit_loss=False,
             optimizers_config=None,
             scheduler_config=None,
+            coe_reg_diff_k=None,
+            coe_reg_begin_k=None,
             state_dim=-1,
             action_dim=-1
     ):
@@ -225,6 +250,9 @@ class AutoCoT(pl.LightningModule):
                 action_dim=action_dim
             )
 
+        self.coe_reg_diff_k = coe_reg_diff_k
+        self.coe_reg_begin_k = coe_reg_begin_k
+
         # flag_collapse: use for record whether we are in 'index collapse' situation
         self.flag_collapse = False
         self.kmeans_idx = 0
@@ -266,6 +294,18 @@ class AutoCoT(pl.LightningModule):
         # from s[0:T-1], a[0:T-1] get key_soft[0:T-1]
         # if commit, from s[0:T-1], a[0:T-2] get kcs_key_net[0:T-1]
         key_soft, kcs_key_net = self.key_net(states, timesteps, actions)
+
+        reg_k_line = 0.0
+        if self.coe_reg_diff_k is not None:
+            reg_diff_k_line = diff_cos_sim_loss(key_soft)
+            reg_k_line = reg_k_line + self.coe_reg_diff_k * reg_diff_k_line
+        else:
+            reg_diff_k_line = 0.0
+        if self.coe_reg_begin_k is not None:
+            reg_begin_k_line = begin_cos_sim_loss(key_soft)
+            reg_k_line = reg_k_line + self.coe_reg_begin_k * reg_begin_k_line
+        else:
+            reg_begin_k_line = 0.0
 
         # VQ mapping
         key_hard, loss_dict, indices, var = self.key_book(key_soft)
@@ -322,7 +362,12 @@ class AutoCoT(pl.LightningModule):
         else:
             loss_commitment = 0.0
 
-        loss = loss_preds + self.coe_example * loss_recs + (1.0 - self.coe_example) * loss_commitment + loss_dict
+        loss = \
+            loss_preds \
+            + self.coe_example * loss_recs + (1.0 - self.coe_example) * loss_commitment \
+            + loss_dict \
+            - reg_k_line
+
 
         # log the loss-es
         self.log_dict(
@@ -330,10 +375,13 @@ class AutoCoT(pl.LightningModule):
                 'loss': loss,
                 'loss_preds': loss_preds,
                 'loss_recs': loss_recs,
-                'loss_commitment': loss_commitment,
-                'loss_dict': loss_dict
+                # 'loss_commitment': loss_commitment,
+                'loss_dict': loss_dict,
+                'reg_diff_k_line': reg_diff_k_line,
+                'reg_begin_k_line': reg_begin_k_line
             }, prog_bar=True, on_step=True, on_epoch=True
         )
+
 
         # loss key_book choice variation
         if var is not None:

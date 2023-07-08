@@ -314,6 +314,8 @@ if __name__ == "__main__":
         commit_config=commit_config,
         optimizers_config=None,
         scheduler_config=None,
+        coe_reg_diff_k=None,
+        coe_reg_begin_k=None,
         state_dim=state_dim,
         action_dim=action_dim
     )

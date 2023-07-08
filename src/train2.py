@@ -86,6 +86,14 @@ def parse_args():
     parser.add_argument("--n_commit_layer", default=4, type=int,
                         help="Number of attention layers in commit_net, if use it")
 
+    # regularization option
+    parser.add_argument("--coe_reg_diff_k", type=str, default='1e-3',
+                        help="regularization: successive direction of key_soft's movement"
+                             "shall be as similar as possible")
+    parser.add_argument("--coe_reg_begin_k", type=str, default='1e-3',
+                        help="regularization: direction of key_soft's movement from begin to certain timestep"
+                             "shall be as similar as possible to the direction from begin to end")
+
     # General hyper-parameters regarding module loading and saving
     parser.add_argument("--model_name", default='TEST', type=str, help="Model name (for storing ckpts).")
     parser.add_argument("--from_model_name", default='', type=str, help="Name of the pretrained module.")
@@ -239,6 +247,8 @@ if __name__ == "__main__":
         commit_config=commit_config,
         optimizers_config=optimizer_config,
         scheduler_config=scheduler_config,
+        coe_reg_diff_k=None if args.coe_reg_diff_k == 'none' else float(args.coe_reg_diff_k),
+        coe_reg_begin_k=None if args.coe_reg_begin_k == 'none' else float(args.coe_reg_begin_k),
         state_dim=state_dim,
         action_dim=action_dim
     )
