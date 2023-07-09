@@ -41,18 +41,22 @@ def get_loss(preds, targets, lengths):
     return loss
 
 
-def diff_cos_sim_loss(v):
+def diff_cos_sim_loss(v, bound=None):
     diff_v = v[:, 1:, ...] - v[:, :-1, ...]
     diff_v_norm = F.normalize(diff_v, p=2, dim=2)
     diff_v_cos_sim = F.cosine_similarity(diff_v_norm[:, :-1, ...], diff_v_norm[:, 1:, ...], dim=2)
+    if bound is not None:
+        diff_v_cos_sim = torch.where(diff_v_cos_sim >= bound, bound, diff_v_cos_sim)
     loss = diff_v_cos_sim.mean()
     return loss
 
 
-def begin_cos_sim_loss(v):
+def begin_cos_sim_loss(v, bound=None):
     v_begin = v[:, 1:, ...] - v[:, 0:1, ...]
     v_begin_norm = F.normalize(v_begin, p=2, dim=2)
     v_begin_cos_sim = F.cosine_similarity(v_begin_norm[:, :-1, ...], v_begin_norm[:, -1:, ...], dim=2)
+    if bound is not None:
+        v_begin_cos_sim = torch.where(v_begin_cos_sim >= bound, bound, v_begin_cos_sim)
     loss = v_begin_cos_sim.mean()
     return loss
 
@@ -158,7 +162,9 @@ class AutoCoT(pl.LightningModule):
             optimizers_config=None,
             scheduler_config=None,
             coe_reg_diff_k=None,
+            bound_reg_diff_k=None,
             coe_reg_begin_k=None,
+            bound_reg_begin_k=None,
             state_dim=-1,
             action_dim=-1
     ):
@@ -254,7 +260,9 @@ class AutoCoT(pl.LightningModule):
             )
 
         self.coe_reg_diff_k = coe_reg_diff_k
+        self.bound_reg_diff_k = bound_reg_diff_k
         self.coe_reg_begin_k = coe_reg_begin_k
+        self.bound_reg_begin_k = bound_reg_begin_k
 
         # flag_collapse: use for record whether we are in 'index collapse' situation
         self.flag_collapse = False
@@ -300,12 +308,12 @@ class AutoCoT(pl.LightningModule):
 
         reg_k_line = 0.0
         if self.coe_reg_diff_k is not None:
-            reg_diff_k_line = diff_cos_sim_loss(key_soft)
+            reg_diff_k_line = diff_cos_sim_loss(key_soft, self.bound_reg_diff_k)
             reg_k_line = reg_k_line + self.coe_reg_diff_k * reg_diff_k_line
         else:
             reg_diff_k_line = 0.0
         if self.coe_reg_begin_k is not None:
-            reg_begin_k_line = begin_cos_sim_loss(key_soft)
+            reg_begin_k_line = begin_cos_sim_loss(key_soft, self.bound_reg_begin_k)
             reg_k_line = reg_k_line + self.coe_reg_begin_k * reg_begin_k_line
         else:
             reg_begin_k_line = 0.0
@@ -375,7 +383,6 @@ class AutoCoT(pl.LightningModule):
         # log the loss-es
         self.log_dict(
             {
-                'loss': loss,
                 'loss_preds': loss_preds,
                 'loss_recs': loss_recs,
                 # 'loss_commitment': loss_commitment,

@@ -315,7 +315,9 @@ if __name__ == "__main__":
         optimizers_config=None,
         scheduler_config=None,
         coe_reg_diff_k=None,
+        bound_reg_diff_k=None,
         coe_reg_begin_k=None,
+        bound_reg_begin_k=None,
         state_dim=state_dim,
         action_dim=action_dim
     )
@@ -334,7 +336,6 @@ if __name__ == "__main__":
 
         current_label = -1
         i_begin = 0
-        i_gt = 0
 
         for step in range(traj_action.shape[0] - 1):
             # print('step #', step, end=' ')
@@ -351,9 +352,9 @@ if __name__ == "__main__":
             if indices_item != current_label:
                 if current_label != -1:
                     print(f'key {current_label}\t[{i_begin}, {step - 1}]', end='')
-                    if i_begin <= key_states_gt[i_gt][1] <= step - 1:
-                        print(f'\tgt key states', key_states_gt[i_gt][1], key_states_gt[i_gt][0], end='')
-                        i_gt += 1
+                    for i_gt in range(len(key_states_gt)):
+                        if i_begin <= key_states_gt[i_gt][1] <= step - 1:
+                            print(f'\tgt key states', key_states_gt[i_gt][1], key_states_gt[i_gt][0], end='')
                     print()
                 current_label = indices_item
                 i_begin = step
@@ -369,5 +370,9 @@ if __name__ == "__main__":
                 state_hist.append(torch.from_numpy(traj_state[step + 1:step + 2]).float())
                 action_hist.append(torch.from_numpy(traj_action[step: step + 1]).float())
         if current_label != -1:
-            print(f'key {current_label}\t[{i_begin}, {traj_action.shape[0] - 1}]')
+            print(f'key {current_label}\t[{i_begin}, {traj_action.shape[0] - 1}]', end='')
+            for i_gt in range(len(key_states_gt)):
+                if i_begin <= key_states_gt[i_gt][1] <= (traj_action.shape[0] - 1):
+                    print(f'\tgt key states', key_states_gt[i_gt][1], key_states_gt[i_gt][0], end='')
+            print()
         input()

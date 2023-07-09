@@ -90,9 +90,16 @@ def parse_args():
     parser.add_argument("--coe_reg_diff_k", type=str, default='1e-3',
                         help="regularization: successive direction of key_soft's movement"
                              "shall be as similar as possible")
+    parser.add_argument("--bound_reg_diff_k", type=str, default='0.0',
+                        help="bound of above regularization. When cos(d1, d2) >= bound_reg_diff_k"
+                             "we do not regularize it more")
+
     parser.add_argument("--coe_reg_begin_k", type=str, default='1e-3',
                         help="regularization: direction of key_soft's movement from begin to certain timestep"
                              "shall be as similar as possible to the direction from begin to end")
+    parser.add_argument("--bound_reg_begin_k", type=str, default='0.0',
+                        help="bound of above regularization. When cos(d1, d2) >= bound_reg_begin_k"
+                             "we do not regularize it more")
 
     # General hyper-parameters regarding module loading and saving
     parser.add_argument("--model_name", default='TEST', type=str, help="Model name (for storing ckpts).")
@@ -248,7 +255,9 @@ if __name__ == "__main__":
         optimizers_config=optimizer_config,
         scheduler_config=scheduler_config,
         coe_reg_diff_k=None if args.coe_reg_diff_k == 'none' else float(args.coe_reg_diff_k),
+        bound_reg_diff_k=None if args.bound_reg_diff_k == 'none' else float(args.bound_reg_diff_k),
         coe_reg_begin_k=None if args.coe_reg_begin_k == 'none' else float(args.coe_reg_begin_k),
+        bound_reg_begin_k=None if args.bound_reg_begin_k == 'none' else float(args.bound_reg_begin_k),
         state_dim=state_dim,
         action_dim=action_dim
     )
