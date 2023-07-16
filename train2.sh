@@ -4,18 +4,18 @@ cd src &&
 
 # Example script for PickCube training (with a good set of hyper-parameters).
 # --model_name=independent-sin_k-lay_3-10_cod-smo_None-sub \
-CUDA_VISIBLE_DEVICES=6 python train2.py \
-    --n_iters=3600000 --batch_size=256 \
-    --init_lr=5e-4 --weight_decay=0.001 --lr_schedule=cos_decay_with_warmup --t_warmup=1000 \
+CUDA_VISIBLE_DEVICES=0 python train2.py \
+    --n_iters=5000000 --batch_size=256 \
+    --init_lr=1e-3 --weight_decay=0.001 --lr_schedule=cos_decay_with_warmup --t_warmup=1000 \
     --beta1=0.9 --beta2=0.95 \
     --dropout=0.0 --n_head=8 --n_embd=128 --sub_pos=False \
     --n_key_layer=3 \
-    --vq_n_e=10 --vq_beta=0.2 --vq_legacy=True --vq_smooth=0.5 --vq_log=True --vq_kmeans_reset=1000 --vq_kmeans_step=100 \
+    --vq_n_e=5 --vq_beta=0.2 --vq_legacy=True --vq_smooth=0.5 --vq_log=True --vq_kmeans_reset=1000 --vq_kmeans_step=100 \
     --n_act_layer=3 --seq_k=True \
-    --commit=none --n_commit_layer=3 \
-    --coe_example=10.0 --n_example_layer=3 \
-    --coe_reg_diff_k=0.01 --bound_reg_diff_k=0.8 --coe_reg_begin_k=0.01 --bound_reg_begin_k=0.8 \
-    --model_name=kae-code_10-smooth_0.5-seq_k-example_10.0-reg_diff_0.01_bound_0.8_begin_0.01_bound_0.8 \
+    --commit=independent --n_commit_layer=3 \
+    --coe_example=0.0 --n_example_layer=3 \
+    --coe_reg_diff_k=none --bound_reg_diff_k=none --coe_reg_begin_k=none --bound_reg_begin_k=none \
+    --model_name=kac-code_5-smooth_0.5-seq_k-subgoal \
     --task=PegInsertionSide-v0 --control_mode=pd_joint_delta_pos --obs_mode=state --seed=0 \
     --num_traj=-1 --context_length=60 --min_seq_length=60 \
     --save_every=1000 --log_every=1000 \

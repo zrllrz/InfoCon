@@ -61,6 +61,17 @@ def begin_cos_sim_loss(v, bound=None):
     return loss
 
 
+def key_states_movement_loss(key_hard_plus, key_commit, key_commit_next, marginal):
+    return F.triplet_margin_loss(
+        anchor=key_hard_plus,
+        positive=key_commit_next,
+        negative=key_commit,
+        margin=marginal,
+        p=2.0
+    )
+
+
+
 def init_centriods(datas, n_centriods):
     N, D = datas.shape
     i0 = torch.randint(0, N, (1,))[0]
@@ -247,12 +258,13 @@ class AutoCoT(pl.LightningModule):
             self.commit_type = 'none'
         assert self.use_soft_commit_loss is False
 
+        self.coe_example = coe_example
+
         if coe_example > 0.0:
             assert example_config is not None
             if coe_example >= 1.0:
                 assert self.commit_type == 'none'
             # use example_net to reconstruct k[0:t-1] to s[0:t-1], a[0:t-2]
-            self.coe_example = coe_example
             self.example_net = ExampleNet(
                 config=example_config,
                 state_dim=state_dim,
@@ -320,11 +332,13 @@ class AutoCoT(pl.LightningModule):
 
         # VQ mapping
         key_hard, loss_dict, indices, var = self.key_book(key_soft)
+        # print('VQ mapping, indices shape', indices.shape)
 
         if var == 0 and self.flag_collapse is False:
             self.flag_collapse = True
         elif var != 0 and self.flag_collapse is True:
             self.flag_collapse = False
+
 
         if self.coe_example > 0.0:
             # reconstruction from key_hard to s[0:t-1], a[0:t-2]
@@ -370,12 +384,22 @@ class AutoCoT(pl.LightningModule):
         if key_commit_soft is not None:
             loss_commitment = torch.mean((key_commit_soft - key_hard.detach()) ** 2) + \
                               self.key_book.beta * torch.mean((key_commit_soft.detach() - key_hard) ** 2)
+            # print(indices.shape)
+            loss_key_movement = key_states_movement_loss(
+                key_hard_plus=self.key_book.index_select(indices=indices + 1)[:, :-1, ...],   ### WRONG, NEED TO BE THE NEXT IN INDICE!!!
+                key_commit=key_soft[:, :-1, ...],
+                key_commit_next=key_soft[:, 1:, ...],
+                marginal=1e-6,
+            )
+
         else:
             loss_commitment = 0.0
+            loss_key_movement = 0.0
 
         loss = \
             loss_preds \
-            + self.coe_example * loss_recs + (1.0 - self.coe_example) * loss_commitment \
+            + self.coe_example * loss_recs \
+            + (1.0 - self.coe_example) * (loss_commitment + loss_key_movement)\
             + loss_dict \
             - reg_k_line
 
@@ -384,11 +408,12 @@ class AutoCoT(pl.LightningModule):
         self.log_dict(
             {
                 'loss_preds': loss_preds,
-                'loss_recs': loss_recs,
-                # 'loss_commitment': loss_commitment,
+                # 'loss_recs': loss_recs,
+                'loss_commitment': loss_commitment,
+                'loss_key_movement': loss_key_movement,
                 'loss_dict': loss_dict,
-                'reg_diff_k_line': reg_diff_k_line,
-                'reg_begin_k_line': reg_begin_k_line
+                # 'reg_diff_k_line': reg_diff_k_line,
+                # 'reg_begin_k_line': reg_begin_k_line
             }, prog_bar=True, on_step=True, on_epoch=True
         )
 

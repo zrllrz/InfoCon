@@ -255,7 +255,7 @@ class BasicNet(nn.Module):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
-    # Given state and action) history, put forward possible k_soft[0:t-1]
+    # Given state and action history, put forward possible k_soft[0:t-1]
     # `timesteps` is used for the global+local position embedding
     # Maybe will output commit if needed
     def forward(self, states, timesteps, actions=None):
@@ -480,5 +480,5 @@ class ActNet(nn.Module):
             else:
                 key_commit_soft = self.key_predictor(x[:, 0:(T*3):3, :])
                 if self.sub_pos:
-                    key_commit_soft = key_commit_soft - pos_emb[:, 0:(T * 3):3, :]
+                    key_commit_soft = key_commit_soft - pos_emb[:, 0:(T*3):3, :]
                 return act_preds, key_commit_soft

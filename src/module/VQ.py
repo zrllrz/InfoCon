@@ -20,7 +20,7 @@ class VQ2Linear(nn.Module):
         self.legacy = legacy
         self.log_choice = log_choice
 
-        self.embedding = nn.Embedding(self.n_e, self.e_dim)
+        self.embedding = nn.Embedding(self.n_e + 1, self.e_dim)
         self.embedding.weight.data.uniform_(-1.0 / self.n_e, 1.0 / self.n_e)
 
     def forward(self, z):
@@ -29,10 +29,10 @@ class VQ2Linear(nn.Module):
 
         # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
         d = torch.sum(z ** 2, dim=1, keepdim=True) + \
-            torch.sum(self.embedding.weight ** 2, dim=1) -2 * \
+            torch.sum(self.embedding.weight ** 2, dim=1) - 2 * \
             torch.einsum('bd,dn->bn', z, rearrange(self.embedding.weight, 'n d -> d n'))
 
-        min_encoding_indices = torch.argmin(d, dim=1)
+        min_encoding_indices = torch.argmin(d[:, :-1], dim=1)
 
         z_q = self.embedding(min_encoding_indices).view(z.shape)
 
@@ -64,7 +64,7 @@ class VQ2(nn.Module):
         self.legacy = legacy
         self.log_choice = log_choice
 
-        self.embedding = nn.Embedding(self.n_e, self.e_dim)
+        self.embedding = nn.Embedding(1 + self.n_e, self.e_dim)
         self.embedding.weight.data.uniform_(-1.0 / self.n_e, 1.0 / self.n_e)
 
     def forward(self, z, flatten_in=False, flatten_out=False):
@@ -80,7 +80,7 @@ class VQ2(nn.Module):
             torch.sum(self.embedding.weight ** 2, dim=1) - 2 * \
             torch.einsum('bd,dn->bn', z_flattened, rearrange(self.embedding.weight, 'n d -> d n'))
 
-        min_encoding_indices = torch.argmin(d, dim=1)
+        min_encoding_indices = torch.argmin(d[:, :-1], dim=1)
 
         z_q = self.embedding(min_encoding_indices).view(z.shape)
 
@@ -105,6 +105,21 @@ class VQ2(nn.Module):
             return z_q, loss, min_encoding_indices, v
         else:
             return z_q, loss, min_encoding_indices, None
+
+    def index_select(self, indices, flatten_in=False):
+        indices = indices.contiguous()
+        if flatten_in is False:
+            indices_flattened = indices.view(-1)  # (bs * T)
+        else:
+            indices_flattened = indices
+        # print(indices_flattened.shape)
+        # print(indices.shape)
+        z_out = self.embedding(indices_flattened)
+        # print(z_out.shape)
+        z_out = z_out.view(indices.shape[0], indices.shape[1], self.e_dim)
+        # print(z_out.shape)
+
+        return z_out
 
     # softmax-based commitment loss
     # def get_soft_commit_loss(self, z_commit_soft, indices):
