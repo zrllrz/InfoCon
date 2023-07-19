@@ -11,9 +11,8 @@ import pytorch_lightning as pl
 from data import MS2Demos, get_padding_fn
 from autocot import (
     KeyNetConfig,
-    ActNetConfig,
-    RecNetConfig,
-    AutoCoT,
+    ActCommitNetConfig,
+    AutoCoT
 )
 from lr_scheduler import CosineAnnealingLRWarmup
 from pytorch_lightning.callbacks import ModelCheckpoint
@@ -47,36 +46,28 @@ def parse_args():
     parser.add_argument("--n_head", default=8, type=int, help="Number of attention heads.")
     parser.add_argument("--n_embd", default=128, type=int, help="Hidden feature dimension.")
 
-    # Hyper-parameters regarding KeyNet, KeyBook, ActNet
-    parser.add_argument('--keynet_commit', type=bool, default='s+a',
-                        help="Model type for the KeyNet module")
-    parser.add_argument("--n_key_layer", default=3, type=int,
+    # Hyper-parameters regarding key_net, key_book, act_net, commit_net
+    parser.add_argument("--n_key_layer", default=4, type=int,
                         help="Number of attention layers in KeyNet")
-    parser.add_argument("--use_skip", default=False, type=bool,
-                        help="whether to use skip connection between KeyNet and ActNet or not")
-    parser.add_argument('--vq_len', type=int, default=100,
-                        help="Length of the Key States Codebook")
+
+    parser.add_argument('--vq_n_e', type=int, default=100,
+                        help="How many kinds of keys in the key_book")
     parser.add_argument('--vq_beta', type=str, default='0.2',
                         help="Coefficient in the VQ loss")
     parser.add_argument('--vq_legacy', type=bool, default=False,
                         help="Place that add vq_beta, should always be False")
     parser.add_argument('--vq_log', type=bool, default=True,
                         help="log variation of indices choice")
-    parser.add_argument('--vq_kmeans_reset', type=int, default=1000,
+    parser.add_argument('--vq_kmeans_reset', type=int, default=None,
                         help="steps interval of resetting embedding using k-means")
-    parser.add_argument('--vq_kmeans_step', type=int, default=100,
+    parser.add_argument('--vq_kmeans_step', type=int, default=None,
                         help="interation steps of k-means")
-    parser.add_argument('--actnet_type', type=str, default='s+a+cot',
-                        help="Model type for the ActNet module")
-    parser.add_argument("--n_act_layer", default=3, type=int,
+    parser.add_argument("--n_act_layer", default=4, type=int,
                         help="Number of attention layers in ActNet")
-    parser.add_argument('--key_states', type=str, default='abc',
-                        help="Which key states to use (see GPTConfig for the spec. format).")
-    parser.add_argument('--recnet_type', type=str, default='s',
-                        help="Model type for the RecNet module")
-    parser.add_argument("--n_rec_layer", default=3, type=int,
-                        help="Number of attention layers in RecNet")
-
+    parser.add_argument("--n_commit_layer", default=4, type=int,
+                        help="Number of attention layers in commit_net")
+    parser.add_argument("--subgoal_marginal", default='1e-6', type=str,
+                        help="Triple loss marginal for sub-goal loss")
 
     # General hyper-parameters regarding module loading and saving
     parser.add_argument("--model_name", default='TEST', type=str, help="Model name (for storing ckpts).")
@@ -94,12 +85,12 @@ def parse_args():
     parser.add_argument('--context_length', type=int, default=60,
                         help="Context size of CoTPC (the maximium length of sequences " +
                              "sampled from demo trajectories in training).")
-    parser.add_argument('--min_seq_length', type=int, default=1,
+    parser.add_argument('--min_seq_length', type=int, default=60,
                         help="Mininum length of sequences sampled from demo trajectories in training.")
 
     # Save and log frequencies.
-    parser.add_argument("--save_every", default=40000, type=int, help="Save module every # iters.")
-    parser.add_argument("--log_every", default=2000, type=int, help="log metrics every # iters.")
+    parser.add_argument("--save_every", default=10, type=int, help="Save module every # epoch.")
+    parser.add_argument("--log_every", default=10, type=int, help="log metrics every # iters.")
 
     # For faster data loader.
     parser.add_argument("--num_workers", default=5, type=int,
@@ -137,39 +128,39 @@ if __name__ == "__main__":
         collate_fn=collate_fn,
         drop_last=True,
     )
-    data_iter = iter(train_data)
 
     state_dim, action_dim = train_dataset.info()
     key_config = KeyNetConfig(
-        block_size=args.context_length,
-        n_layer=args.n_key_layer,
         n_embd=args.n_embd,
         n_head=args.n_head,
-        model_type=args.keynet_type,
         attn_pdrop=float(args.dropout),
         resid_pdrop=float(args.dropout),
         embd_pdrop=float(args.dropout),
+        block_size=args.context_length,
+        n_layer=args.n_key_layer,
         max_timestep=train_dataset.max_steps,
-        use_skip_connection=args.use_skip,
     )
-    act_config = ActNetConfig(
+    act_config = ActCommitNetConfig(
+        n_embd=args.n_embd,
+        n_head=args.n_head,
+        attn_pdrop=float(args.dropout),
+        resid_pdrop=float(args.dropout),
+        embd_pdrop=float(args.dropout),
         block_size=args.context_length,
         n_layer=args.n_act_layer,
-        n_embd=args.n_embd,
-        n_head=args.n_head,
-        model_type=args.actnet_type,
-        attn_pdrop=float(args.dropout),
-        resid_pdrop=float(args.dropout),
-        key_states=args.key_states
+        max_timestep=train_dataset.max_steps,
+        commit=False
     )
-    rec_config = RecNetConfig(
-        block_size=args.context_length,
-        n_layer=args.n_rec_layer,
+    commit_config = ActCommitNetConfig(
         n_embd=args.n_embd,
         n_head=args.n_head,
-        model_type=args.recnet_type,
         attn_pdrop=float(args.dropout),
         resid_pdrop=float(args.dropout),
+        embd_pdrop=float(args.dropout),
+        block_size=args.context_length,
+        n_layer=args.n_commit_layer,
+        max_timestep=train_dataset.max_steps,
+        commit=True
     )
 
     optimizer_config = {
@@ -196,18 +187,20 @@ if __name__ == "__main__":
 
     autocot_model = AutoCoT(
         key_config=key_config,
-        vq_len=args.vq_len,
+        vq_n_e=args.vq_n_e,
         vq_beta=float(args.vq_beta),
         vq_legacy=args.vq_legacy,
         vq_log=args.vq_log,
         vq_kmeans_reset=args.vq_kmeans_reset,
         vq_kmeans_step=args.vq_kmeans_step,
         act_config=act_config,
-        rec_config=rec_config,
+        commit_config=commit_config,
+        subgoal_marginal=float(args.subgoal_marginal),
         optimizers_config=optimizer_config,
         scheduler_config=scheduler_config,
         state_dim=state_dim,
-        action_dim=action_dim
+        action_dim=action_dim,
+        key_dim=args.n_embd
     )
 
     # autocot_model.configure_optimizers()
@@ -225,15 +218,10 @@ if __name__ == "__main__":
 
     log_path = os.path.join(model_path, 'log.txt')
 
-    # modelcheckpoint = ModelCheckpoint(
-    #     dirpath=model_path,
-    #     save_last=True,
-    #     every_n_train_steps=args.save_every
-    # )
     mysavelogger = MySaveLogger(
         path=model_path,
         args=args,
-        epoch_frequency=2000
+        epoch_frequency=args.save_every
     )
 
     trainer = pl.Trainer(

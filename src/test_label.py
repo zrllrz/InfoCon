@@ -76,18 +76,18 @@ def parse_args():
 if __name__ == "__main__":
 
     args = parse_args()
-    assert args.model_name, 'Should specify --model_name'
-    assert args.from_ckpt > 0, 'Should specify --from_ckpt'
+    # assert args.model_name, 'Should specify --model_name'
+    # assert args.from_ckpt > 0, 'Should specify --from_ckpt'
 
     # Load the module.
-    path = os.path.join(MODEL_PATH, f'{args.model_name}/epoch{args.from_ckpt}.pth')
+    # path = os.path.join(MODEL_PATH, f'{args.model_name}/epoch{args.from_ckpt}.pth')
     # Load to cpu first to avoid cuda related errors from ManiSkill2.
-    ckpt = torch.load(path, map_location=torch.device('cpu'))
-    state_dict_from_ckpt, params = ckpt['module'], ckpt['metadata']
-    state_dim = state_dict_from_ckpt['key_net.state_encoder.net.0.weight'].shape[1]
-    action_dim = state_dict_from_ckpt['key_net.action_encoder.net.0.weight'].shape[1]
-    max_timestep = state_dict_from_ckpt['key_net.global_pos_emb'].shape[1]
-    print('Loaded ckpt from:', path)
+    # ckpt = torch.load(path, map_location=torch.device('cpu'))
+    # state_dict_from_ckpt, params = ckpt['module'], ckpt['metadata']
+    # state_dim = state_dict_from_ckpt['key_net.state_encoder.net.0.weight'].shape[1]
+    # action_dim = state_dict_from_ckpt['key_net.action_encoder.net.0.weight'].shape[1]
+    # max_timestep = state_dict_from_ckpt['key_net.global_pos_emb'].shape[1]
+    # print('Loaded ckpt from:', path)
 
     # Load demos to fetch the env. seeds used in training.
     traj_path = os.path.join(
@@ -196,44 +196,7 @@ if __name__ == "__main__":
                 if dataset['key_label'][idx][step_idx] is None:
                     dataset['key_label'][idx][step_idx] = 'end'
 
-    # config our net
-    key_config = KeyNetConfig(
-        block_size=params['context_length'],
-        n_layer=params['n_key_layer'],
-        n_embd=params['n_embd'],
-        n_head=params['n_head'],
-        model_type=params['keynet_type'],
-        attn_pdrop=float(params['dropout']),
-        resid_pdrop=float(params['dropout']),
-        embd_pdrop=float(params['dropout']),
-        max_timestep=max_timestep,
-        use_skip_connection=params['use_skip']
-    )
-    act_config = ActNetConfig(
-        block_size=params['context_length'],
-        n_layer=params['n_act_layer'],
-        n_embd=params['n_embd'],
-        n_head=params['n_head'],
-        model_type=params['actnet_type'],
-        attn_pdrop=float(params['dropout']),
-        resid_pdrop=float(params['dropout']),
-        key_states=params['key_states']
-    )
-    autocot_model = AutoCoT(
-        key_config=key_config,
-        vq_len=params['vq_len'],
-        vq_beta=float(params['vq_beta']),
-        vq_legacy=params['vq_legacy'],
-        vq_log=params['vq_log'],
-        act_config=act_config,
-        optimizers_config=None,
-        scheduler_config=None,
-        state_dim=state_dim,
-        action_dim=action_dim
-    )
-    autocot_model = autocot_model.cuda()
-    autocot_model.load_state_dict(state_dict_from_ckpt, strict=False)
-    autocot_model.eval()
+
 
     for i_traj in range(length):
         traj_state = torch.tensor(dataset['obs'][i_traj])
@@ -247,8 +210,8 @@ if __name__ == "__main__":
         delta1_traj_state = traj_state - torch.cat([torch.zeros_like(traj_state)[0:1], traj_state[:-1]])
         delta2_traj_state = delta1_traj_state - torch.cat([torch.zeros_like(delta1_traj_state)[0:1], delta1_traj_state[:-1]])
 
-        mode_delta1_traj_state = torch.linalg.norm(delta1_traj_state, ord=2, dim=-1)
-        mode_delta2_traj_state = torch.linalg.norm(delta2_traj_state, ord=2, dim=-1)
+        mode_delta1_traj_state = torch.linalg.norm(delta1_traj_state, ord=1, dim=-1)
+        mode_delta2_traj_state = torch.linalg.norm(delta2_traj_state, ord=1, dim=-1)
 
         for i in range(l):
             print(mode_delta1_traj_state[i], '\t', mode_delta2_traj_state[i], '\t', traj_label[i])

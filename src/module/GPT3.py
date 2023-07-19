@@ -39,7 +39,7 @@ class GELU(nn.Module):
 
 class CausalSelfAttention(nn.Module):
     """
-    Self Attn Layer, can choose to be of 3 * blocksize or 2 * blocksize
+    A basic multi-head masked self-attention layer
     """
     def __init__(self, config):
         super().__init__()
@@ -57,16 +57,15 @@ class CausalSelfAttention(nn.Module):
         # output projection
         self.proj = nn.Linear(config.n_embd, config.n_embd)
 
-        if config.attn_type == 'w_key':
+        # causal mask to ensure that attention is only applied to the left in the input sequence
+        if config.block_type == 'w_key':
             block_size = config.block_size * 3
-        elif config.attn_type == 'wo_key':
+        elif config.block_type == 'wo_key':
             block_size = config.block_size * 2
         else:
             block_size = config.block_size
-        self.register_buffer(
-            "mask",
-            torch.tril(torch.ones(block_size, block_size)).view(1, 1, block_size, block_size)
-        )
+        self.register_buffer("mask", torch.tril(torch.ones(block_size, block_size)).view(1, 1, block_size, block_size))
+
         self.n_head = config.n_head
 
     def forward(self, x):
@@ -94,9 +93,8 @@ class CausalSelfAttention(nn.Module):
 class Block(nn.Module):
     """
     A Transformer block,
-        select it to be:
-            BasicCausalSelfAttention or ActCausalSelfAttention
-        with config.block_type {'basic', 'act'}
+        select it to be: w_key, wo_key (other will become a more simple self-attn... without action...)
+        with config.block_type {'w_key', 'wo_key'}
     """
 
     def __init__(self, config):
@@ -142,38 +140,34 @@ class BlockLayers(nn.Module):
         return x, output
 
 
-class KeyNet(nn.Module):
+class KeyCommitNet(nn.Module):
     """
-    KeyNet
-    We try to recognize k[0:(t-1)] from s[0:(t-1)], a[0:(t-1)].
-    (
-        The best model maybe to recognize k(t-1) from s[0:(t-1)],k[0:(t-2)],a[0:(t-1)]
-        But it seems that we have to do it auto-regression-ly:
-        s0,a0 -> k0
-        s0,k0,a0,s1,a1 -> k1
-        s0,k0,a0,s1,k1,a1,s2,a2 -> k2
-        ...
-        Which is kind of inefficient.
-        (But this process often happens in RL, thinking of what you're doing when you're using Policy Gradient...)
-    )
+    If using it as ActNet, we
+        Recognition of key states from (raw) observation of s[0:(t-1)], a[0:(t-1)]
+        encode s[0:(t-1)], a[0:(t-1)] into p_change[0:(t-1)]
+        to indicate key state changes
+    If using it as CommitNet, we
+        decode s[0:(t-1)], a[0:(t-2)] into p_change[0:(t-1)]
+        to commit the recognition from KeyNet
     """
-    def __init__(self, config, state_dim=-1, action_dim=-1, key_dim=-1):
+    def __init__(self, config, state_dim=-1, action_dim=-1):
         super().__init__()
 
-        assert state_dim > 0 and action_dim > 0 and key_dim > 0
-        assert config.attn_type == 'wo_key'
+        assert state_dim > 0 and action_dim > 0
+        assert config.block_type == 'wo_key'
         self.config = config
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.key_dim = key_dim
         self.block_size = config.block_size * 2  # state + action
+
+        self.do_commit = config.do_commit
 
         self.local_pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
         self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep, config.n_embd))
 
         # State embeddings & Action embeddings
-        self.state_encoder = MLP(state_dim, config.n_embd, hidden_dims=[256])
-        self.action_encoder = MLP(action_dim, config.n_embd, hidden_dims=[256])
+        self.state_encoder = MLP(self.state_dim, config.n_embd, hidden_dims=[256])
+        self.action_encoder = MLP(self.action_dim, config.n_embd, hidden_dims=[256])
 
         # embedding dropout
         self.drop = nn.Dropout(config.embd_pdrop)
@@ -182,12 +176,11 @@ class KeyNet(nn.Module):
         self.blocks = BlockLayers(config)
 
         self.ln = nn.LayerNorm(config.n_embd)
-        # Key predictor
-        self.key_predictor = MLP(config.n_embd, key_dim, hidden_dims=[256, 256])
+        # - log ( 1 - p ) for switching key state
+        # using relu will make sure that output is >= 0, (while - log ( 1 - p ) >= 0)
+        self.p_change_predictor = MLP(config.n_embd, 1, hidden_dims=[256, 256])
 
-        # print('init module in BasicNet')
         self.apply(self._init_weights)
-        # print('init module in BasicNet done')
 
     def _init_weights(self, module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
@@ -198,25 +191,29 @@ class KeyNet(nn.Module):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
+    # Given state and action history, put forward possible k_soft[0:t-1]
+    # `timesteps` is used for the global+local position embedding
+    # Maybe will output commit if needed
     def forward(self, states, timesteps, actions=None):
         B, T = states.shape[0], states.shape[1]
         state_embeddings = self.state_encoder(states)
 
         # Embeddings for state (action, and key state query) tokens.
         token_embeddings = torch.zeros([B, T*2, self.config.n_embd],
-                                       dtype=torch.float32,
-                                       device=states.device)
+                                       dtype=torch.float32, device=states.device)
 
-        # states embeddings in token
+        # If using action history as inputs: during training, all actions are
+        # specified; during inference, only actions in the past are specified.
+        # That is, the first action prediction has no action history as inputs.
         token_embeddings[:, :(T*2):2, :] = state_embeddings
 
         if actions is not None:
+            # Assume the last action is not used as inputs during training.
             if actions.shape[1] >= T:
-                # We have last action
                 action_embeddings = self.action_encoder(actions[:, :T])
                 token_embeddings[:, 1:(T*2):2, :] = action_embeddings
             else:
-                # last states situation (finish, no more action...)
+                # last states situation
                 assert actions.shape[1] == (T - 1)
                 action_embeddings = self.action_encoder(actions[:, :(T-1)])
                 token_embeddings[:, 1:(T*2-1):2, :] = action_embeddings
@@ -230,37 +227,39 @@ class KeyNet(nn.Module):
 
         x = token_embeddings + pos_emb
 
-        key_emb = self.drop(x)
-        key_emb, _ = self.blocks(key_emb)
-        key_emb = self.ln(key_emb)
-        key_emb = self.key_predictor(key_emb)
+        x = self.drop(x)
+        x, _ = self.blocks(x)
+        x = self.ln(x)
+        if self.do_commit:
+            x_key = x[:, 0:(T*2):2, :]  # from s[0:(t-1)], a[0:(t-2)]
+        else:
+            x_key = x[:, 1:(T*2):2, :]  # from s[0:(t-1)], a[0:(t-1)]
 
-        # finally output, then they will be send to key_book to select out suitable
-        # key states embedding vectors in the code book
-        key_soft = key_emb[:, 1:(2*T):2, :]
+        # - log ( 1 - p )
+        minus_log_one_minus_p = self.p_change_predictor(x_key)
 
-        return key_soft
+        # convert to probability
+        p_change = torch.clip(1.0 - torch.exp(-minus_log_one_minus_p), min=0.0, max=1.0)
+        print(p_change.shape, minus_log_one_minus_p.shape)
+
+        # return original output ( - log ( 1 - p ) ), and, probability
+        return minus_log_one_minus_p, p_change
 
 
-class ActCommitNet(nn.Module):
+class ActNet(nn.Module):
     """
-    If using as ActNet:
-        action prediction of a(t-1) based on s[0:(t-1)], k[0:(t-1)], a[0:(t-2)]
-    If using as CommitNet:
-        commit key state k(t-1) based on s[0:(t-1)], k[0:(t-2)], a[0:(t-2)]
+    Using it as ActNet, we
+        decode s[0:(t-1)], k[0:(t-1)], a[0:(t-2)] into a[0:(t-1)], for prediction
     """
-    def __init__(self, config, state_dim=-1, action_dim=-1, key_dim=-1):
+    def __init__(self, config, state_dim=-1, action_dim=-1):
         super().__init__()
 
-        assert state_dim > 0 and action_dim > 0 and key_dim > 0
-        assert config.attn_type == 'w_key'
+        assert state_dim > 0 and action_dim > 0
+        assert config.block_type == 'w_key'
         self.config = config
         self.state_dim = state_dim
         self.action_dim = action_dim
-        self.key_dim = key_dim
         self.block_size = config.block_size * 3
-
-        self.commit = config.commit  # use it as CommitNet or ActNet, True will be CommitNet
 
         self.local_pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
         self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep, config.n_embd))
@@ -268,7 +267,7 @@ class ActCommitNet(nn.Module):
         # State embeddings & Action embeddings & Key embeddings
         self.state_encoder = MLP(state_dim, config.n_embd, hidden_dims=[256])
         self.action_encoder = MLP(action_dim, config.n_embd, hidden_dims=[256])
-        self.key_encoder = MLP(key_dim, config.n_embd, hidden_dims=[256])
+        self.key_encoder = MLP(config.n_embd, config.n_embd, hidden_dims=[256])
 
         # embedding dropout
         self.drop = nn.Dropout(config.embd_pdrop)
@@ -278,12 +277,7 @@ class ActCommitNet(nn.Module):
         self.ln = nn.LayerNorm(config.n_embd)
 
         # Action predictor
-        if config.commit is True:
-            # Use as CommitNet
-            self.key_predictor = MLP(config.n_embd, key_dim, hidden_dims=[256, 256])
-        else:
-            # Use as ActNet
-            self.action_predictor = MLP(config.n_embd, action_dim, hidden_dims=[256, 256])
+        self.action_predictor = MLP(config.n_embd, action_dim, hidden_dims=[256, 256])
 
         self.apply(self._init_weights)
 
@@ -297,20 +291,16 @@ class ActCommitNet(nn.Module):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
-    def forward(self, states, timesteps, actions=None, keys=None):
+    def forward(self, states, timesteps, actions=None, key=None):
         B, T = states.shape[0], states.shape[1]
+
         state_embeddings = self.state_encoder(states)
         token_embeddings = torch.zeros([B, T*3, self.config.n_embd], dtype=torch.float32, device=states.device)
-
         token_embeddings[:, 0:(T*3):3, :] = state_embeddings
-        if keys is not None:
-            # key is None when at s0, committing, since keys are from KeyNet + KeyBook
-            # keys should not be None (???????)
-            key_embeddings = self.key_encoder(keys)
+        if key is not None:   # training
+            key_embeddings = self.key_encoder(key)
             token_embeddings[:, 1:(T*3):3, :] = key_embeddings
-
-        if actions is not None:
-            # actions is None when at s0
+        if actions is not None:  # actions is None when at s0
             # the last action is not used as inputs during ActNet training.
             token_embeddings[:, 2:(T*3-1):3, :] = self.action_encoder(actions[:, :(T-1)])
 
@@ -327,11 +317,6 @@ class ActCommitNet(nn.Module):
         x, _ = self.blocks(x)
         x = self.ln(x)
 
-        if self.commit is True:
-            # Use it as CommitNet, do committing key prediction
-            key_commit_soft = self.key_predictor(x[:, 0:(T*3):3, :])
-            return key_commit_soft
-        else:
-            # Use it as ActNet, do action prediction
-            act_preds = self.action_predictor(x[:, 1:(T*3):3, :])
-            return act_preds
+        x_action = x[:, 1:(T*3):3, :]
+        act_preds = self.action_predictor(x_action)
+        return act_preds

@@ -86,11 +86,12 @@ if __name__ == "__main__":
     # Load to cpu first to avoid cuda related errors from ManiSkill2.
     ckpt = torch.load(path, map_location=torch.device('cpu'))
     state_dict_from_ckpt, params = ckpt['module'], ckpt['metadata']
+    print(state_dict_from_ckpt['key_book.embedding.weight'].shape)
+
     state_dim = state_dict_from_ckpt['key_net.state_encoder.net.0.weight'].shape[1]
     action_dim = state_dict_from_ckpt['key_net.action_encoder.net.0.weight'].shape[1]
     max_timestep = state_dict_from_ckpt['key_net.global_pos_emb'].shape[1]
     print('Loaded ckpt from:', path)
-
     # Load demos to fetch the env. seeds used in training.
     traj_path = os.path.join(
         DATA_PATH,
@@ -299,6 +300,7 @@ if __name__ == "__main__":
         coe_example = 0.0
     print('coe_example =', coe_example)
 
+    print(params['vq_n_e'])
     autocot_model = AutoCoT(
         key_config=key_config,
         vq_n_e=params['vq_n_e'],
