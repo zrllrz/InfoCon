@@ -229,9 +229,16 @@ class VQNeighbor(nn.Module):
 
         d = d.view(B, T, -1)  # reshape the distance back to (B, T, n_e)
 
-        # Only select out indices and key items based on the former time step indices
-        encoding_indices = torch.zeros(size=(B, 1), dtype=torch.int64, device=d.device)
+        # First timestep (0 step) in every context will use the nearest key
+        encoding_indices = torch.clip(
+            torch.argmin(d[:, 0, :], dim=1).unsqueeze(1),
+            min=0,
+            max=(self.n_e - 1)
+        )
 
+        # for the rest timestep, they will only select between form k_hard and its succesive key k_hard+
+        # e.g. when your hard key is #1 at context timestep 0,
+        #      your hard key is from {#1, #2} at context timestep 1,
         for t in range(0, T-1, 1):
             d_t = d[:, (t + 1), :]
             ind_here = encoding_indices[:, t:(t + 1)]
@@ -260,7 +267,7 @@ class VQNeighbor(nn.Module):
             encoding_indices = encoding_indices.reshape(z_q.shape[0], z_q.shape[1])
         # (B, T)
         if self.log_choice is True:
-            v = torch.max(encoding_indices)
+            v = torch.max(encoding_indices) - torch.min(encoding_indices)
             return z_q, loss, encoding_indices, v
         else:
             return z_q, loss, encoding_indices, None
