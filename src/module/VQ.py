@@ -208,45 +208,55 @@ class VQNeighbor(nn.Module):
         self.beta = beta
         self.legacy = legacy
         self.log_choice = log_choice
+        self.min_indices = -1
 
         self.embedding = nn.Embedding(1 + n_e, e_dim)
         self.embedding.weight.data.uniform_(-1.0 / n_e, 1.0 / n_e)
 
-    def forward(self, z, flatten_in=False, flatten_out=False):
+        self.register_buffer('arranged_mask', torch.arange(n_e + 1)[:, None])
+
+    def forward(self, z, flatten_in=False, flatten_out=False, indices_forward=None):
         # z shape (bs, T, e_dim)
-        B, T = z.shape[0], z.shape[1]
+        # or indices_forward shape (bs, T) (if not none)
 
-        z = z.contiguous()
-        if flatten_in is False:
-            z_flattened = z.view(-1, self.e_dim)  # (bs * T, e_dim)
+        if indices_forward is None:
+            # Normal forward with data to choose out z_q
+            B, T = z.shape[0], z.shape[1]
+
+            z = z.contiguous()
+            if flatten_in is False:
+                z_flattened = z.view(-1, self.e_dim)  # (bs * T, e_dim)
+            else:
+                z_flattened = z
+
+            # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
+            d = torch.sum(z_flattened ** 2, dim=1, keepdim=True) + \
+                torch.sum(self.embedding.weight ** 2, dim=1) - 2 * \
+                torch.einsum('bd,dn->bn', z_flattened, rearrange(self.embedding.weight, 'n d -> d n'))
+
+            d = d.view(B, T, -1)  # reshape the distance back to (B, T, n_e)
+
+            # First timestep (0 step) in every context will use the nearest key
+            encoding_indices = torch.clip(
+                torch.argmin(d[:, 0, :], dim=1).unsqueeze(1),
+                min=0,
+                max=(self.n_e - 1)
+            )
+
+            # for the rest timestep, they will only select between form k_hard and its succesive key k_hard+
+            # e.g. when your hard key is #1 at context timestep 0,
+            #      your hard key is from {#1, #2} at context timestep 1,
+            for t in range(0, T-1, 1):
+                d_t = d[:, (t + 1), :]
+                ind_here = encoding_indices[:, t:(t + 1)]
+                d_here = torch.gather(input=d_t, dim=1, index=ind_here)
+                ind_next = torch.clip(ind_here + 1, min=0, max=(self.n_e - 1))
+                d_next = torch.gather(input=d_t, dim=1, index=ind_next)
+                ind_new = torch.where(d_here <= d_next, ind_here, ind_next)
+                encoding_indices = torch.cat([encoding_indices, ind_new], dim=1)
         else:
-            z_flattened = z
-
-        # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
-        d = torch.sum(z_flattened ** 2, dim=1, keepdim=True) + \
-            torch.sum(self.embedding.weight ** 2, dim=1) - 2 * \
-            torch.einsum('bd,dn->bn', z_flattened, rearrange(self.embedding.weight, 'n d -> d n'))
-
-        d = d.view(B, T, -1)  # reshape the distance back to (B, T, n_e)
-
-        # First timestep (0 step) in every context will use the nearest key
-        encoding_indices = torch.clip(
-            torch.argmin(d[:, 0, :], dim=1).unsqueeze(1),
-            min=0,
-            max=(self.n_e - 1)
-        )
-
-        # for the rest timestep, they will only select between form k_hard and its succesive key k_hard+
-        # e.g. when your hard key is #1 at context timestep 0,
-        #      your hard key is from {#1, #2} at context timestep 1,
-        for t in range(0, T-1, 1):
-            d_t = d[:, (t + 1), :]
-            ind_here = encoding_indices[:, t:(t + 1)]
-            d_here = torch.gather(input=d_t, dim=1, index=ind_here)
-            ind_next = torch.clip(ind_here + 1, min=0, max=(self.n_e - 1))
-            d_next = torch.gather(input=d_t, dim=1, index=ind_next)
-            ind_new = torch.where(d_here <= d_next, ind_here, ind_next)
-            encoding_indices = torch.cat([encoding_indices, ind_new], dim=1)
+            # use indices_forward for z_q choice
+            encoding_indices = indices_forward
 
         z_q = self.embedding(encoding_indices.view(-1)).view(z.shape)
 
@@ -260,14 +270,14 @@ class VQNeighbor(nn.Module):
 
         # preserve gradients
         z_q = z + (z_q - z).detach()
-
         z_q = z_q.contiguous()
 
         if flatten_out is False:
-            encoding_indices = encoding_indices.reshape(z_q.shape[0], z_q.shape[1])
-        # (B, T)
+            encoding_indices = encoding_indices.reshape(z_q.shape[0], z_q.shape[1])  # (B, T)
+
         if self.log_choice is True:
-            v = torch.max(encoding_indices) - torch.min(encoding_indices)
+            self.min_indices = torch.min(encoding_indices)
+            v = torch.max(encoding_indices) - self.min_indices
             return z_q, loss, encoding_indices, v
         else:
             return z_q, loss, encoding_indices, None
@@ -282,6 +292,31 @@ class VQNeighbor(nn.Module):
         z_out = z_out.view(indices.shape[0], indices.shape[1], self.e_dim)
 
         return z_out
+
+    def get_explore_indices(self, input, indices):
+        with torch.no_grad():
+            input_flattened = input.view(-1)[:, None]
+            expanded_indices = (indices.view(-1))[None].expand(self.n_e + 1, -1)
+            mask = (expanded_indices == self.arranged_mask).to(input.dtype)
+
+            label_cnt = mask.sum(-1, keepdim=True)  # number of data in every label
+            label_sum = mask @ input_flattened  # sum in every label
+            label_square_sum = mask @ (input_flattened * input_flattened)  # sum of square in every label
+
+            label_mean = label_sum / label_cnt  # mean in every label
+            label_var = label_square_sum / (label_cnt - 1.0) - (label_sum * label_sum) / (label_cnt * (label_cnt - 1.0))
+            # (estimation of) variation in every label
+            torch.nan_to_num_(label_mean)
+            torch.nan_to_num_(label_var)
+
+            # higher than (mean + std) is intolerable
+            upper_bound = label_mean[indices] + torch.sqrt(label_var)[indices]
+            explore_mask = (upper_bound <= input)
+
+            # thus these key state latents will try to become next one
+            explore_indices = torch.clip(indices + explore_mask, min=0, max=self.n_e - 1)
+
+            return explore_indices
 
 
 if __name__ == '__main__':
