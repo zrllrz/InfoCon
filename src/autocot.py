@@ -88,7 +88,6 @@ def init_centroids_neighbor(datas, unified_t, n_centroids):
     for _ in range(n_centroids - 1):
         d = torch.abs(unified_t_unsq - cent_init_u_t)
         d_min = d.min(dim=1)[0] + 1e-5
-
         d_min = torch.where(torch.isnan(d_min), torch.zeros_like(d_min), d_min)
         d_min = torch.where(torch.isinf(d_min), torch.zeros_like(d_min), d_min)
         d_min = torch.where(torch.less(d_min, 0.0), torch.zeros_like(d_min), d_min)
@@ -98,13 +97,13 @@ def init_centroids_neighbor(datas, unified_t, n_centroids):
             i = torch.randint(0, N, (1,))[0]
         else:
             i = d_min.multinomial(num_samples=1)[0]
-
         cent_init_ind = torch.cat([cent_init_ind, torch.tensor([i])], dim=0)
         cent_init_u_t = torch.cat([cent_init_u_t, unified_t_unsq[i]], dim=0)
 
+
     # sorted by unified time step!!!!!!
     _, sorted_sub_ind = torch.sort(cent_init_u_t)
-    cent_init_ind = cent_init_ind[sorted_sub_ind]
+    cent_init_ind = cent_init_ind[sorted_sub_ind.to(cent_init_ind.device)]
     cent_init_datas = datas[cent_init_ind]
 
     return cent_init_datas
@@ -268,7 +267,7 @@ class AutoCoT(pl.LightningModule):
         # kmeans++ initialization
         if unified_t is not None:
             self.key_book.embedding.weight.data = \
-                init_centroids_neighbor(key_soft_flatten, unified_t, self.key_book.n_e + 1)
+                init_centroids_neighbor(key_soft_flatten, unified_t.view(-1), self.key_book.n_e + 1)
         else:
             self.key_book.embedding.weight.data = \
                 init_centroids(key_soft_flatten, self.key_book.n_e + 1)

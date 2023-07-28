@@ -4,7 +4,7 @@ cd src &&
 
 # Example script for PickCube training (with a good set of hyper-parameters).
 # --model_name=independent-sin_k-lay_3-10_cod-smo_None-sub \
-CUDA_VISIBLE_DEVICES=4 python train.py \
+CUDA_VISIBLE_DEVICES=2 python train.py \
     --n_iters=5_000_000 --batch_size=256 \
     --init_lr=5e-4 --weight_decay=0.001 --lr_schedule=cos_decay_with_warmup --t_warmup=1000 \
     --beta1=0.9 --beta2=0.95 \
@@ -14,7 +14,7 @@ CUDA_VISIBLE_DEVICES=4 python train.py \
     --n_act_layer=3 \
     --n_commit_layer=3 \
     --subgoal_marginal=1e-6 \
-    --model_name=rkac-contrast-legacy-code_10-subgoal-detach-persistence_none_wreset-keg_0.1 \
+    --model_name=rkac-contrast-legacy-code_10-subgoal-detach-persistence_none_wutreset-keg_0.1 \
     --task=PegInsertionSide-v0 --control_mode=pd_joint_delta_pos --obs_mode=state --seed=0 \
     --num_traj=-1 --context_length=60 --min_seq_length=60 \
     --save_every=1000 --log_every=1000 \
