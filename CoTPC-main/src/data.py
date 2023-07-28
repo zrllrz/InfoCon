@@ -79,7 +79,8 @@ class MS2Demos(Dataset):
         data_dict = {
             's': self.data['obs'][index][s_idx:e_idx].astype(np.float32),
             'a': self.data['actions'][index][s_idx:e_idx].astype(np.float32),
-            't': np.array([s_idx]).astype(np.float32),  
+            't': np.array([s_idx]).astype(np.float32),
+            'unified_t': np.arange(start=s_idx, stop=e_idx, step=1.0, dtype=np.float32) / float(l)
             # 'env_states': self.data['env_states'][index][s_idx:e_idx].astype(np.float32),
         }     
         if self.with_key_states:

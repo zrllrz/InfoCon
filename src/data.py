@@ -97,6 +97,7 @@ class MS2Demos(Dataset):
             's': self.data['obs'][index][s_idx:e_idx].astype(np.float32),
             'a': self.data['actions'][index][s_idx:e_idx].astype(np.float32),
             't': np.array([s_idx]).astype(np.float32),
+            'unified_t': np.arange(start=s_idx, stop=e_idx, step=1.0, dtype=np.float32) / l
             # 'env_states': self.data['env_states'][index][s_idx:e_idx].astype(np.float32),
         }     
         if self.with_key_states:
@@ -319,7 +320,7 @@ if __name__ == "__main__":
         with_key_states=True,
         task=task)
 
-    collate_fn = get_padding_fn(['s', 'a', 't', 'k', 'k_label'])
+    collate_fn = get_padding_fn(['s', 'a', 't', 'unified_t', 'k', 'k_label'])
     train_data = DataLoader(
         dataset=train_dataset, 
         batch_size=4,  # batch_size,

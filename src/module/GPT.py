@@ -131,15 +131,21 @@ class BlockLayers(nn.Module):
         self.block_list = nn.ModuleList(Block(config) for _ in range(config.n_layer))
         self.n_head = config.n_head
 
-    def forward(self, x):
+    def forward(self, x, skip_feature=None):
         # B, T, _ = x.shape
         output = []  # Also keep the intermediate results.
 
-        for block in self.block_list:
-            x = block(x)
-            output.append(x)
+        if skip_feature is None:
+            for block in self.block_list:
+                x = block(x)
+                output.append(x)
+            return x, output
 
-        return x, output
+        else:
+            for block in self.block_list:
+                x = block(x) + skip_feature.pop()
+                output.append(x)
+            return x, output
 
 
 class KeyNet(nn.Module):
@@ -231,15 +237,81 @@ class KeyNet(nn.Module):
         x = token_embeddings + pos_emb
 
         key_emb = self.drop(x)
-        key_emb, _ = self.blocks(key_emb)
+        key_emb, skip_features = self.blocks(key_emb)
         key_emb = self.ln(key_emb)
         key_emb = self.key_predictor(key_emb)
 
         # finally output, then they will be send to key_book to select out suitable
         # key states embedding vectors in the code book
         key_soft = key_emb[:, 1:(2*T):2, :]
+        for i in range(len(skip_features)):
+            skip_features[i] = skip_features[i][:, :(T*2):2, :]
 
-        return key_soft
+        return key_soft, skip_features
+
+
+class RecNet(nn.Module):
+    def __init__(self, config, state_dim=-1, key_dim=-1):
+        super().__init__()
+
+        assert state_dim > 0 and key_dim > 0
+        assert config.attn_type == '-'  # only try to reconstruct key state back to state
+        self.config = config
+        self.state_dim = state_dim
+        self.key_dim = key_dim
+        self.block_size = config.block_size
+
+        self.local_pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
+        self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep, config.n_embd))
+
+        # key embeddings
+        self.key_encoder = MLP(key_dim, config.n_embd, hidden_dims=[256])
+
+        # embedding dropout
+        self.drop = nn.Dropout(config.embd_pdrop)
+
+        # Transformer (attention layers)
+        self.blocks = BlockLayers(config)
+
+        self.ln = nn.LayerNorm(config.n_embd)
+
+        # State predictor & Action predictor
+        self.state_predictor = MLP(config.n_embd, state_dim, hidden_dims=[256, 256])
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+            if isinstance(module, nn.Linear) and module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
+
+    # (Must) include in skip_feature, to make sure the keys 'loss' some of the information from states
+    def forward(self, keys, skip_feature, timesteps):
+        B, T = keys.shape[0], keys.shape[1]
+        key_embeddings = self.key_encoder(keys)
+
+        # Embeddings for key (action, and key state query) tokens.
+        token_embeddings = key_embeddings
+
+        # Set up position embeddings similar to that in Decision Transformer.
+        global_pos_emb = torch.repeat_interleave(self.global_pos_emb, B, dim=0)
+        timesteps_rp = torch.repeat_interleave(timesteps[:, None], self.config.n_embd, dim=-1)
+        global_pos_emb = torch.gather(global_pos_emb, 1, timesteps_rp.long())  # BS x 1 x D
+        local_pos_emb = torch.repeat_interleave(self.local_pos_emb[:, :T, :], 1, dim=1)
+        pos_emb = global_pos_emb + local_pos_emb
+
+        x = token_embeddings + pos_emb
+
+        x = self.drop(x)
+        x, _ = self.blocks(x, skip_feature)
+        x = self.ln(x)
+        state_preds = self.state_predictor(x)
+
+        return state_preds
 
 
 class ActCommitNet(nn.Module):

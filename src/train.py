@@ -12,6 +12,7 @@ from data import MS2Demos, get_padding_fn
 from autocot import (
     KeyNetConfig,
     ActCommitNetConfig,
+    RecNetConfig,
     AutoCoT
 )
 from lr_scheduler import CosineAnnealingLRWarmup
@@ -47,6 +48,8 @@ def parse_args():
     parser.add_argument("--n_embd", default=128, type=int, help="Hidden feature dimension.")
 
     # Hyper-parameters regarding key_net, key_book, act_net, commit_net
+    parser.add_argument("--n_rec_layer", default=4, type=int,
+                        help="Number of attention layers in RecNet")
     parser.add_argument("--n_key_layer", default=4, type=int,
                         help="Number of attention layers in KeyNet")
 
@@ -58,6 +61,8 @@ def parse_args():
                         help="Place that add vq_beta, should always be False")
     parser.add_argument('--vq_log', type=bool, default=True,
                         help="log variation of indices choice")
+    parser.add_argument('--vq_persistence', type=str, default='none',
+                        help="stricter distance coe")
     parser.add_argument('--vq_kmeans_reset', type=int, default=None,
                         help="steps interval of resetting embedding using k-means")
     parser.add_argument('--vq_kmeans_step', type=int, default=None,
@@ -117,7 +122,7 @@ if __name__ == "__main__":
         task=args.task, multiplier=args.multiplier)
     print('Training data size:', len(train_dataset))
     print('Max steps:', train_dataset.max_steps)
-    collate_fn = get_padding_fn(['s', 'a', 't', 'k'])
+    collate_fn = get_padding_fn(['s', 'a', 't', 'unified_t', 'k'])
     train_data = DataLoader(
         dataset=train_dataset,
         batch_size=args.batch_size,
@@ -130,6 +135,16 @@ if __name__ == "__main__":
     )
 
     state_dim, action_dim = train_dataset.info()
+    rec_config = RecNetConfig(
+        n_embd=args.n_embd,
+        n_head=args.n_head,
+        attn_pdrop=float(args.dropout),
+        resid_pdrop=float(args.dropout),
+        embd_pdrop=float(args.dropout),
+        block_size=args.context_length,
+        n_layer=args.n_key_layer,
+        max_timestep=train_dataset.max_steps,
+    )
     key_config = KeyNetConfig(
         n_embd=args.n_embd,
         n_head=args.n_head,
@@ -186,11 +201,13 @@ if __name__ == "__main__":
         scheduler_config = None
 
     autocot_model = AutoCoT(
+        rec_config=rec_config,
         key_config=key_config,
         vq_n_e=args.vq_n_e,
         vq_beta=float(args.vq_beta),
         vq_legacy=args.vq_legacy,
         vq_log=args.vq_log,
+        vq_persistence=None if args.vq_persistence == 'none' else float(args.vq_persistence),
         vq_kmeans_reset=args.vq_kmeans_reset,
         vq_kmeans_step=args.vq_kmeans_step,
         act_config=act_config,

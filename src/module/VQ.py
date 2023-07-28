@@ -200,7 +200,7 @@ class VQ3(nn.Module):
 
 
 class VQNeighbor(nn.Module):
-    def __init__(self, n_e, e_dim, beta, legacy=False, log_choice=True):
+    def __init__(self, n_e, e_dim, beta, legacy=False, log_choice=True, persistence=None):
         super().__init__()
         self.n_e = n_e
         self.e_dim = e_dim
@@ -215,58 +215,71 @@ class VQNeighbor(nn.Module):
 
         self.register_buffer('arranged_mask', torch.arange(n_e + 1)[:, None])
 
-    def forward(self, z, flatten_in=False, flatten_out=False, indices_forward=None):
-        # z shape (bs, T, e_dim)
-        # or indices_forward shape (bs, T) (if not none)
-
-        if indices_forward is None:
-            # Normal forward with data to choose out z_q
-            B, T = z.shape[0], z.shape[1]
-
-            z = z.contiguous()
-            if flatten_in is False:
-                z_flattened = z.view(-1, self.e_dim)  # (bs * T, e_dim)
-            else:
-                z_flattened = z
-
-            # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
-            d = torch.sum(z_flattened ** 2, dim=1, keepdim=True) + \
-                torch.sum(self.embedding.weight ** 2, dim=1) - 2 * \
-                torch.einsum('bd,dn->bn', z_flattened, rearrange(self.embedding.weight, 'n d -> d n'))
-
-            d = d.view(B, T, -1)  # reshape the distance back to (B, T, n_e)
-
-            # First timestep (0 step) in every context will use the nearest key
-            encoding_indices = torch.clip(
-                torch.argmin(d[:, 0, :], dim=1).unsqueeze(1),
-                min=0,
-                max=(self.n_e - 1)
-            )
-
-            # for the rest timestep, they will only select between form k_hard and its succesive key k_hard+
-            # e.g. when your hard key is #1 at context timestep 0,
-            #      your hard key is from {#1, #2} at context timestep 1,
-            for t in range(0, T-1, 1):
-                d_t = d[:, (t + 1), :]
-                ind_here = encoding_indices[:, t:(t + 1)]
-                d_here = torch.gather(input=d_t, dim=1, index=ind_here)
-                ind_next = torch.clip(ind_here + 1, min=0, max=(self.n_e - 1))
-                d_next = torch.gather(input=d_t, dim=1, index=ind_next)
-                ind_new = torch.where(d_here <= d_next, ind_here, ind_next)
-                encoding_indices = torch.cat([encoding_indices, ind_new], dim=1)
+        # persistence: use for long time policy
+        if persistence is not None:
+            # should be a float point between (0.0, 1.0)
+            self.persistence = persistence
         else:
-            # use indices_forward for z_q choice
-            encoding_indices = indices_forward
+            self.persistence = 0.0
+
+    def forward(self, z, flatten_in=False, flatten_out=False):
+        # z shape (bs, T, e_dim)
+        B, T = z.shape[0], z.shape[1]
+
+        z = z.contiguous()
+        if flatten_in is False:
+            z_flattened = z.view(-1, self.e_dim)  # (bs * T, e_dim)
+        else:
+            z_flattened = z
+
+        # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
+        d = torch.sum(z_flattened ** 2, dim=1, keepdim=True) + \
+            torch.sum(self.embedding.weight ** 2, dim=1) - 2 * \
+            torch.einsum('bd,dn->bn', z_flattened, rearrange(self.embedding.weight, 'n d -> d n'))
+
+        d = d.view(B, T, -1)  # reshape the distance back to (B, T, n_e)
+
+        # First timestep (0 step) in every context will use the nearest key
+        encoding_indices = torch.clip(
+            torch.argmin(d[:, 0, :], dim=1).unsqueeze(1),
+            min=0,
+            max=(self.n_e - 1)
+        )
+        coe_persistence = torch.zeros(size=(B, 1), dtype=torch.float32, device=d.device)
+
+        # for the rest timestep, they will only select between form k_hard and its succesive key k_hard+
+        # e.g. when your hard key is #1 at context timestep 0,
+        #      your hard key is from {#1, #2} at context timestep 1,
+        for t in range(0, T-1, 1):
+            d_t = d[:, (t + 1), :]
+
+            ind_here = encoding_indices[:, t:(t + 1)]
+            d_here = torch.gather(input=d_t, dim=1, index=ind_here)
+            ind_next = torch.clip(ind_here + 1, min=0, max=(self.n_e - 1))
+            d_next = torch.gather(input=d_t, dim=1, index=ind_next)
+            d_choice_mask = torch.less_equal(d_here, d_next - coe_persistence)
+            ind_new = torch.where(d_choice_mask, ind_here, ind_next)
+            coe_persistence = torch.where(d_choice_mask, coe_persistence + self.persistence / float(self.n_e), 0.0)
+            encoding_indices = torch.cat([encoding_indices, ind_new], dim=1)
 
         z_q = self.embedding(encoding_indices.view(-1)).view(z.shape)
 
         # loss for embedding
         if not self.legacy:
-            loss = self.beta * torch.mean((z_q.detach() - z) ** 2) + \
-                   torch.mean((z_q - z.detach()) ** 2)
+            # loss = \
+            #     self.beta * torch.mean((z_q.detach() - z) ** 2) + \
+            #     torch.mean((z_q - z.detach()) ** 2)
+            loss = \
+                self.beta * self.get_loss_contrast(z, encoding_indices, self.embedding.weight.data.detach()) + \
+                self.get_loss_contrast(z.detach(), encoding_indices, self.embedding.weight.data)
+
         else:
-            loss = torch.mean((z_q.detach() - z) ** 2) + self.beta * \
-                   torch.mean((z_q - z.detach()) ** 2)
+            # loss = \
+            #     torch.mean((z_q.detach() - z) ** 2) + \
+            #     self.beta * torch.mean((z_q - z.detach()) ** 2)
+            loss = \
+                self.get_loss_contrast(z, encoding_indices, self.embedding.weight.data.detach()) + \
+                self.beta * self.get_loss_contrast(z.detach(), encoding_indices, self.embedding.weight.data)
 
         # preserve gradients
         z_q = z + (z_q - z).detach()
@@ -293,6 +306,15 @@ class VQNeighbor(nn.Module):
 
         return z_out
 
+    def get_loss_contrast(self, z, ind, book):
+        z_q = book[ind]
+        loss_indices = torch.sum((z - z_q) ** 2, dim=-1)
+        loss_all = torch.sum((z.unsqueeze(2) - book.view(1, 1, -1, self.e_dim)) ** 2, dim=-1)
+        loss_contrast = loss_indices.unsqueeze(-1) - loss_all + (1E-6 / self.n_e)
+        loss_contrast = torch.maximum(loss_contrast, torch.zeros_like(loss_contrast))
+        return loss_contrast.mean()
+
+
     def get_explore_indices(self, input, indices):
         with torch.no_grad():
             input_flattened = input.view(-1)[:, None]
@@ -317,14 +339,3 @@ class VQNeighbor(nn.Module):
             explore_indices = torch.clip(indices + explore_mask, min=0, max=self.n_e - 1)
 
             return explore_indices
-
-
-if __name__ == '__main__':
-    print('###----- test VQ.py -----###')
-
-    key_book = VQ3(n_e=5, e_dim=2, p_change_th=0.8, log_choice=True)
-    p_change_test = torch.rand(size=(2, 6))
-    z_out, v = key_book(p_change_test)
-    print(z_out, '\n', v)
-
-    print('###--- test VQ.py done --###')
