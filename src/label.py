@@ -10,6 +10,7 @@ import mani_skill2.envs
 import torch
 
 from autocot import (
+    RecNetConfig,
     KeyNetConfig,
     ActCommitNetConfig,
     AutoCoT
@@ -243,6 +244,17 @@ if __name__ == "__main__":
             print(f'#{i}', ks[0], ks[1])
 
     # config our net
+    rec_config = RecNetConfig(
+        n_embd=params['n_embd'],
+        n_head=params['n_head'],
+        attn_pdrop=float(params['dropout']),
+        resid_pdrop=float(params['dropout']),
+        embd_pdrop=float(params['dropout']),
+        block_size=params['context_length'],
+        n_layer=params['n_key_layer'],
+        max_timestep=max_timestep,
+    )
+
     key_config = KeyNetConfig(
         n_embd=params['n_embd'],
         n_head=params['n_head'],
@@ -278,10 +290,12 @@ if __name__ == "__main__":
 
     print(params['vq_n_e'])
     autocot_model = AutoCoT(
+        rec_config=rec_config,
         key_config=key_config,
         vq_n_e=params['vq_n_e'],
         vq_beta=float(params['vq_beta']),
         vq_legacy=params['vq_legacy'],
+        vq_elastic=params['vq_elastic'],
         vq_log=params['vq_log'],
         vq_kmeans_reset=params['vq_kmeans_reset'],
         vq_kmeans_step=params['vq_kmeans_step'],

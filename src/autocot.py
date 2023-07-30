@@ -313,7 +313,9 @@ class AutoCoT(pl.LightningModule):
             self.kmeans_idx += 1
 
     def training_step(self, batch, batch_idx):
-        states, timesteps, actions, _, lengths = batch['s'], batch['t'], batch['a'], batch['unified_t'], batch['lengths']
+        states, timesteps, actions, unified_t, lengths = batch['s'], batch['t'], batch['a'], batch['unified_t'], batch['lengths']
+        zero_ts_mask = torch.eq(unified_t[:, 0], 0)
+        # print('zero_ts_mask.shape', zero_ts_mask.shape)
         B, T = states.shape[0], states.shape[1]
 
         # Latent encoding
@@ -340,7 +342,8 @@ class AutoCoT(pl.LightningModule):
         # VQ mapping
         if self.vq_elasitc is True:
             key_hard, loss_dict, indices, var = \
-                self.key_book(key_soft, flatten_in=False, flatten_out=False, loss_criteria=losses_preds[:B, :T, ...])
+                self.key_book(key_soft, flatten_in=False, flatten_out=False,
+                              loss_criteria=losses_preds[:B, :T, ...], zero_ts_mask=zero_ts_mask)
         else:
             key_hard, loss_dict, indices, var = self.key_book(key_soft)
 
@@ -410,8 +413,12 @@ class AutoCoT(pl.LightningModule):
         #     actions = actions[None, ...]
 
         # key_net label
-        key_soft = self.key_net(states, timesteps, actions)
-        _, _, label, _ = self.key_book(key_soft)
+        key_soft, _ = self.key_net(states, timesteps, actions)
+        if self.vq_elasitc is True:
+            _, _, label, _ = self.key_book(key_soft, flatten_in=False, flatten_out=False,
+                                           loss_criteria=None, zero_ts_mask=None)
+        else:
+            _, _, label, _ = self.key_book(key_soft)
         return label[:, -1]
 
     def configure_optimizers(self):

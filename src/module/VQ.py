@@ -375,9 +375,7 @@ class VQElastic(nn.Module):
         self.coe_loss_tolerance = coe_loss_tolerance
         self.coe_rate_tolerance = coe_rate_tolerance
         self.flinch_bound = coe_rate_tolerance / (1.0 + coe_loss_tolerance)
-        self.explor_bound = 0.5 * coe_rate_tolerance / (1.0 + coe_loss_tolerance)
-        self.flinch_mask = torch.zeros(size=(n_e + 1,), dtype=torch.int32)
-        self.explore_mask = torch.zeros(size=(n_e + 1,), dtype=torch.int32)
+        self.explore_bound = 0.5 * coe_rate_tolerance / (1.0 + coe_loss_tolerance)
 
     def elastic_update(self, loss_criteria, indices):
         # loss_criteria: (B, T) size tensor of loss
@@ -403,8 +401,9 @@ class VQElastic(nn.Module):
 
             flinch_mask = \
                 torch.where(torch.greater(label_anomaly_rate, self.flinch_bound), 1, 0)
+            flinch_mask[self.n_e - 1] = 0  # last key should not flinch (it does not have a successive key to flinch!!!)
             explore_mask = \
-                torch.where(torch.less(label_anomaly_rate, self.explor_bound), 1, 0)
+                torch.where(torch.less(label_anomaly_rate, self.explore_bound), 1, 0)
             explore_mask = \
                 torch.cat(
                     [torch.zeros(size=(1,), dtype=torch.int64, device=loss_criteria.device), explore_mask[: -1]],
@@ -412,9 +411,10 @@ class VQElastic(nn.Module):
                 )
         return flinch_mask, explore_mask
 
-    def forward(self, z, flatten_in=False, flatten_out=False, loss_criteria=None):
+    def forward(self, z, flatten_in=False, flatten_out=False, loss_criteria=None, zero_ts_mask=None):
         # z shape (bs, T, e_dim)
-        assert loss_criteria is not None
+        # assert loss_criteria is not None
+        # assert zero_ts_mask is not None
         B, T = z.shape[0], z.shape[1]
 
         z = z.contiguous()
@@ -432,12 +432,15 @@ class VQElastic(nn.Module):
 
         # First timestep (0 step) in every context will use the nearest key
         encoding_indices = torch.clip(
-            torch.argmin(d[:, 0, :], dim=1).unsqueeze(1),
+            torch.argmin(d[:, 0, :], dim=1),
             min=0,
             max=(self.n_e - 1)
         )
-        coe_persistence = torch.zeros(size=(B, 1), dtype=torch.float32, device=d.device)
+        if zero_ts_mask is not None:
+            encoding_indices = torch.where(zero_ts_mask, 0, encoding_indices)
+        encoding_indices = encoding_indices.unsqueeze(1)
 
+        coe_persistence = torch.zeros(size=(B, 1), dtype=torch.float32, device=d.device)
         # for the rest timestep, they will only select between form k_hard and its succesive key k_hard+
         # e.g. when your hard key is #1 at context timestep 0,
         #      your hard key is from {#1, #2} at context timestep 1,
@@ -454,11 +457,12 @@ class VQElastic(nn.Module):
             encoding_indices = torch.cat([encoding_indices, ind_new], dim=1)
 
         # ADJUST encoding_indices ACCORDING TO self.elastic_state
-        flinch_mask, explore_mask = self.elastic_update(loss_criteria, encoding_indices)
-        flinch_update = flinch_mask[encoding_indices]
-        explore_update = explore_mask[encoding_indices]
-        # print(type(flinch_update), type(explore_update))
-        encoding_indices = torch.clip(encoding_indices + flinch_update - explore_update, min=0, max=(self.n_e-1))
+        if loss_criteria is not None:
+            flinch_mask, explore_mask = self.elastic_update(loss_criteria, encoding_indices)
+            flinch_update = flinch_mask[encoding_indices]
+            explore_update = explore_mask[encoding_indices]
+            # print(type(flinch_update), type(explore_update))
+            encoding_indices = torch.clip(encoding_indices + flinch_update - explore_update, min=0, max=(self.n_e-1))
 
         z_q = self.embedding(encoding_indices.view(-1)).view(z.shape)
 
@@ -487,8 +491,10 @@ class VQElastic(nn.Module):
             encoding_indices = encoding_indices.reshape(z_q.shape[0], z_q.shape[1])  # (B, T)
 
         if self.log_choice is True:
-            self.min_indices = torch.min(encoding_indices)
-            v = torch.max(encoding_indices) - self.min_indices
+            self.min_indices, _ = torch.min(encoding_indices, dim=1)
+            max_indices, _ = torch.max(encoding_indices, dim=1)
+            v = torch.max(max_indices - self.min_indices)
+            # v = torch.max(encoding_indices) - self.min_indices
             return z_q, loss, encoding_indices, v
         else:
             return z_q, loss, encoding_indices, None
