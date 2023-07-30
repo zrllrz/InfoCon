@@ -376,7 +376,8 @@ class VQElastic(nn.Module):
         self.coe_rate_tolerance = coe_rate_tolerance
         self.flinch_bound = coe_rate_tolerance / (1.0 + coe_loss_tolerance)
         self.explor_bound = 0.5 * coe_rate_tolerance / (1.0 + coe_loss_tolerance)
-        self.elastic_state = torch.zeros(size=(n_e,), dtype=torch.int32)
+        self.flinch_mask = torch.zeros(size=(n_e + 1,), dtype=torch.int32)
+        self.explore_mask = torch.zeros(size=(n_e + 1,), dtype=torch.int32)
 
     def elastic_update(self, loss_criteria, indices):
         # loss_criteria: (B, T) size tensor of loss
@@ -400,23 +401,20 @@ class VQElastic(nn.Module):
             label_anomaly_rate = torch.div(label_anomaly_cnt, label_cnt).view(-1)
             torch.nan_to_num_(label_anomaly_rate)
 
-            update_elastic_state = torch.zeros(size=(self.n_e + 1,), dtype=torch.int32)
-            update_elastic_state = \
-                torch.where(
-                    torch.greater(label_anomaly_rate, self.flinch_bound),
-                    1, update_elastic_state
+            flinch_mask = \
+                torch.where(torch.greater(label_anomaly_rate, self.flinch_bound), 1, 0)
+            explore_mask = \
+                torch.where(torch.less(label_anomaly_rate, self.explor_bound), 1, 0)
+            explore_mask = \
+                torch.cat(
+                    [torch.zeros(size=(1,), dtype=torch.int64, device=loss_criteria.device), explore_mask[: -1]],
+                    dim=0
                 )
-            update_elastic_state = \
-                torch.where(
-                    torch.less(label_anomaly_rate, self.explor_bound),
-                    2, update_elastic_state
-                )
-            assert update_elastic_state.shape == self.elastic_state.shape
-            self.elastic_state = update_elastic_state
+        return flinch_mask, explore_mask
 
-
-    def forward(self, z, flatten_in=False, flatten_out=False):
+    def forward(self, z, flatten_in=False, flatten_out=False, loss_criteria=None):
         # z shape (bs, T, e_dim)
+        assert loss_criteria is not None
         B, T = z.shape[0], z.shape[1]
 
         z = z.contiguous()
@@ -455,8 +453,12 @@ class VQElastic(nn.Module):
             coe_persistence = torch.where(d_choice_mask, coe_persistence + self.persistence / float(self.n_e), 0.0)
             encoding_indices = torch.cat([encoding_indices, ind_new], dim=1)
 
-
         # ADJUST encoding_indices ACCORDING TO self.elastic_state
+        flinch_mask, explore_mask = self.elastic_update(loss_criteria, encoding_indices)
+        flinch_update = flinch_mask[encoding_indices]
+        explore_update = explore_mask[encoding_indices]
+        # print(type(flinch_update), type(explore_update))
+        encoding_indices = torch.clip(encoding_indices + flinch_update - explore_update, min=0, max=(self.n_e-1))
 
         z_q = self.embedding(encoding_indices.view(-1)).view(z.shape)
 

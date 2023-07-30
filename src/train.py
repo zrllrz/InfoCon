@@ -59,6 +59,12 @@ def parse_args():
                         help="Coefficient in the VQ loss")
     parser.add_argument('--vq_legacy', type=bool, default=False,
                         help="Place that add vq_beta, should always be False")
+    parser.add_argument('--vq_elastic', type=bool, default=True,
+                        help="Place that add vq_beta, should always be False")
+    parser.add_argument('--coe_loss_tolerance', type=str, default='1.0',
+                        help="Place that add vq_beta, should always be False")
+    parser.add_argument('--coe_rate_tolerance', type=str, default='0.1',
+                        help="Place that add vq_beta, should always be False")
     parser.add_argument('--vq_log', type=bool, default=True,
                         help="log variation of indices choice")
     parser.add_argument('--vq_persistence', type=str, default='none',
@@ -206,6 +212,9 @@ if __name__ == "__main__":
         vq_n_e=args.vq_n_e,
         vq_beta=float(args.vq_beta),
         vq_legacy=args.vq_legacy,
+        vq_elastic=args.vq_elastic,
+        coe_loss_tolerance=float(args.coe_loss_tolerance),
+        coe_rate_tolerance=float(args.coe_rate_tolerance),
         vq_log=args.vq_log,
         vq_persistence=None if args.vq_persistence == 'none' else float(args.vq_persistence),
         vq_kmeans_reset=args.vq_kmeans_reset,

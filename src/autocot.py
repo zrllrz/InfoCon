@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from module.VQ import VQNeighbor
+from module.VQ import VQNeighbor, VQElastic
 from module.GPT import KeyNet, ActCommitNet, RecNet
 
 import pytorch_lightning as pl
@@ -18,10 +18,10 @@ from einops import rearrange
 def mse_loss_with_weights(preds, targets, weights=None):
     losses = torch.mean((preds - targets) ** 2, -1)
     if weights is None:
-        return torch.mean(losses)
+        return torch.mean(losses), losses
     else:
         assert losses.shape == weights.shape, losses.shape
-        return torch.mean(losses * weights)
+        return torch.mean(losses * weights), losses
 
 
 def get_loss(preds, targets, lengths):
@@ -35,11 +35,11 @@ def get_loss(preds, targets, lengths):
     masks = torch.less(temp, lengths.expand(B, max_len)).float()  # B x max_len
     # (temp < lengths.expand(B, max_len)).float()  # B x max_len
 
-    loss = mse_loss_with_weights(
+    loss, lossess = mse_loss_with_weights(
         preds.reshape(-1, preds.size(-1)),
         targets.reshape(-1, targets.size(-1)),
         masks.reshape(-1))
-    return loss
+    return loss, lossess.reshape(B, -1)
 
 
 def key_states_movement_loss(key_hard_plus, key_commit, key_commit_next, marginal):
@@ -168,6 +168,9 @@ class AutoCoT(pl.LightningModule):
         vq_legacy,
         act_config,
         commit_config,
+        vq_elastic=True,
+        coe_loss_tolerance=1.0,
+        coe_rate_tolerance=0.1,
         vq_log=True,
         vq_persistence=None,
         vq_kmeans_reset=None,
@@ -212,14 +215,29 @@ class AutoCoT(pl.LightningModule):
             persistence = 1.0
         print(persistence)
 
-        self.key_book = VQNeighbor(
-            n_e=vq_n_e,
-            e_dim=key_dim,
-            beta=vq_beta,
-            legacy=vq_legacy,
-            log_choice=vq_log,
-            persistence=persistence
-        )
+        self.vq_elasitc = vq_elastic
+        if vq_elastic is True:
+            print('use VQElastic')
+            self.key_book = VQElastic(
+                n_e=vq_n_e,
+                e_dim=key_dim,
+                beta=vq_beta,
+                legacy=vq_legacy,
+                log_choice=vq_log,
+                persistence=persistence,
+                coe_loss_tolerance=coe_loss_tolerance,
+                coe_rate_tolerance=coe_rate_tolerance
+            )
+        else:
+            self.key_book = VQNeighbor(
+                n_e=vq_n_e,
+                e_dim=key_dim,
+                beta=vq_beta,
+                legacy=vq_legacy,
+                log_choice=vq_log,
+                persistence=persistence
+            )
+
         if vq_kmeans_reset is not None:
             assert isinstance(vq_kmeans_reset, int)
             assert isinstance(vq_kmeans_step, int)
@@ -285,7 +303,7 @@ class AutoCoT(pl.LightningModule):
 
     @torch.no_grad()
     def on_train_batch_start(self, batch, batch_idx):
-        if self.vq_kmeans_reset is None:
+        if self.vq_elasitc is True or self.vq_kmeans_reset is None:
             return
         else:
             if self.flag_collapse or (self.kmeans_idx % self.vq_kmeans_reset == 0):
@@ -296,24 +314,13 @@ class AutoCoT(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         states, timesteps, actions, _, lengths = batch['s'], batch['t'], batch['a'], batch['unified_t'], batch['lengths']
-        T = states.shape[1]
+        B, T = states.shape[0], states.shape[1]
 
         # Latent encoding
         # from s[0:T-1], a[0:T-1] get key_soft[0:T-1]
         key_soft, skip_features = self.key_net(states, timesteps, actions)
 
         state_recs = self.rec_net(key_soft, skip_features, timesteps)
-
-        # VQ mapping
-        key_hard, loss_dict, indices, var = self.key_book(key_soft)
-
-        if self.vq_kmeans_reset is None:
-            pass
-        else:
-            if var == 0 and self.flag_collapse is False:
-                self.flag_collapse = True
-            elif var != 0 and self.flag_collapse is True:
-                self.flag_collapse = False
 
         # action prediction based on k_hard[0:T-1]
         # from s[0:T-1], a[0:T-2], k_hard[0:T-1] get a[0:T-1]
@@ -324,10 +331,26 @@ class AutoCoT(pl.LightningModule):
         key_commit_soft = self.commit_net(states, timesteps, actions, key_soft)
 
         # loss: state reconstruction
-        loss_recs = get_loss(state_recs, states, lengths)
+        loss_recs, _ = get_loss(state_recs, states, lengths)
 
         # loss: action prediction
-        loss_preds = get_loss(act_preds, actions, lengths)
+        loss_preds, losses_preds = get_loss(act_preds, actions, lengths)
+        # print(losses_preds.shape)
+
+        # VQ mapping
+        if self.vq_elasitc is True:
+            key_hard, loss_dict, indices, var = \
+                self.key_book(key_soft, flatten_in=False, flatten_out=False, loss_criteria=losses_preds[:B, :T, ...])
+        else:
+            key_hard, loss_dict, indices, var = self.key_book(key_soft)
+
+        if self.vq_elasitc is True or self.vq_kmeans_reset is None:
+            pass
+        else:
+            if var == 0 and self.flag_collapse is False:
+                self.flag_collapse = True
+            elif var != 0 and self.flag_collapse is True:
+                self.flag_collapse = False
 
         # loss: commitment
         loss_commitment = \
@@ -374,7 +397,6 @@ class AutoCoT(pl.LightningModule):
                 'dic': loss_dict,
             }, prog_bar=True, on_step=True, on_epoch=True
         )
-
         return loss
 
     def label_single(self, states, timesteps, actions=None):
