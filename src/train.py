@@ -12,7 +12,7 @@ from data import MS2Demos, get_padding_fn
 from autocot import (
     KeyNetConfig,
     ActCommitNetConfig,
-    RecNetConfig,
+    # RecNetConfig,
     AutoCoT
 )
 from lr_scheduler import CosineAnnealingLRWarmup
@@ -48,8 +48,8 @@ def parse_args():
     parser.add_argument("--n_embd", default=128, type=int, help="Hidden feature dimension.")
 
     # Hyper-parameters regarding key_net, key_book, act_net, commit_net
-    parser.add_argument("--n_rec_layer", default=4, type=int,
-                        help="Number of attention layers in RecNet")
+    # parser.add_argument("--n_rec_layer", default=4, type=int,
+    #                     help="Number of attention layers in RecNet")
     parser.add_argument("--n_key_layer", default=4, type=int,
                         help="Number of attention layers in KeyNet")
 
@@ -59,24 +59,28 @@ def parse_args():
                         help="Coefficient in the VQ loss")
     parser.add_argument('--vq_legacy', type=bool, default=False,
                         help="Place that add vq_beta, should always be False")
-    parser.add_argument('--vq_elastic', type=bool, default=True,
-                        help="Place that add vq_beta, should always be False")
-    parser.add_argument('--coe_loss_tolerance', type=str, default='1.0',
-                        help="Place that add vq_beta, should always be False")
-    parser.add_argument('--coe_rate_tolerance', type=str, default='0.1',
-                        help="Place that add vq_beta, should always be False")
+    # parser.add_argument('--vq_elastic', type=bool, default=True,
+    #                     help="Place that add vq_beta, should always be False")
+    # parser.add_argument('--coe_loss_tolerance', type=str, default='1.0',
+    #                     help="Place that add vq_beta, should always be False")
+    # parser.add_argument('--coe_rate_tolerance', type=str, default='0.1',
+    #                     help="Place that add vq_beta, should always be False")
+    parser.add_argument('--vq_use_contrast', type=bool, default=False,
+                        help="if True, use contrastive loss in VQ")
     parser.add_argument('--vq_log', type=bool, default=True,
                         help="log variation of indices choice")
-    parser.add_argument('--vq_persistence', type=str, default='none',
-                        help="stricter distance coe")
+    # parser.add_argument('--vq_persistence', type=str, default='none',
+    #                     help="stricter distance coe")
     parser.add_argument('--vq_kmeans_reset', type=int, default=None,
                         help="steps interval of resetting embedding using k-means")
     parser.add_argument('--vq_kmeans_step', type=int, default=None,
                         help="interation steps of k-means")
     parser.add_argument("--n_act_layer", default=4, type=int,
                         help="Number of attention layers in ActNet")
-    parser.add_argument("--n_commit_layer", default=4, type=int,
-                        help="Number of attention layers in commit_net")
+    parser.add_argument("--use_key_energy", default=True, type=bool,
+                        help="if True, use key energy gradient to evaluate effect of key states")
+    # parser.add_argument("--n_commit_layer", default=4, type=int,
+    #                     help="Number of attention layers in commit_net")
     parser.add_argument("--subgoal_marginal", default='1e-6', type=str,
                         help="Triple loss marginal for sub-goal loss")
 
@@ -141,16 +145,6 @@ if __name__ == "__main__":
     )
 
     state_dim, action_dim = train_dataset.info()
-    rec_config = RecNetConfig(
-        n_embd=args.n_embd,
-        n_head=args.n_head,
-        attn_pdrop=float(args.dropout),
-        resid_pdrop=float(args.dropout),
-        embd_pdrop=float(args.dropout),
-        block_size=args.context_length,
-        n_layer=args.n_key_layer,
-        max_timestep=train_dataset.max_steps,
-    )
     key_config = KeyNetConfig(
         n_embd=args.n_embd,
         n_head=args.n_head,
@@ -170,18 +164,8 @@ if __name__ == "__main__":
         block_size=args.context_length,
         n_layer=args.n_act_layer,
         max_timestep=train_dataset.max_steps,
-        commit=False
-    )
-    commit_config = ActCommitNetConfig(
-        n_embd=args.n_embd,
-        n_head=args.n_head,
-        attn_pdrop=float(args.dropout),
-        resid_pdrop=float(args.dropout),
-        embd_pdrop=float(args.dropout),
-        block_size=args.context_length,
-        n_layer=args.n_commit_layer,
-        max_timestep=train_dataset.max_steps,
-        commit=True
+        commit=False,
+        use_key_energy=args.use_key_energy
     )
 
     optimizer_config = {
@@ -207,20 +191,15 @@ if __name__ == "__main__":
         scheduler_config = None
 
     autocot_model = AutoCoT(
-        rec_config=rec_config,
         key_config=key_config,
         vq_n_e=args.vq_n_e,
         vq_beta=float(args.vq_beta),
         vq_legacy=args.vq_legacy,
-        vq_elastic=args.vq_elastic,
-        coe_loss_tolerance=float(args.coe_loss_tolerance),
-        coe_rate_tolerance=float(args.coe_rate_tolerance),
         vq_log=args.vq_log,
-        vq_persistence=None if args.vq_persistence == 'none' else float(args.vq_persistence),
+        vq_use_contrast=args.vq_use_contrast,
         vq_kmeans_reset=args.vq_kmeans_reset,
         vq_kmeans_step=args.vq_kmeans_step,
         act_config=act_config,
-        commit_config=commit_config,
         subgoal_marginal=float(args.subgoal_marginal),
         optimizers_config=optimizer_config,
         scheduler_config=scheduler_config,

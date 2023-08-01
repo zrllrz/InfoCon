@@ -149,30 +149,27 @@ class RecNetConfig(RootConfig):
 class ActCommitNetConfig(RootConfig):
     def __init__(self, n_embd, n_head,
                  attn_pdrop, resid_pdrop, embd_pdrop,
-                 block_size, n_layer, max_timestep, commit):
+                 block_size, n_layer, max_timestep,
+                 commit, use_key_energy):
         super().__init__(
             n_embd, n_head,
             attn_pdrop, resid_pdrop, embd_pdrop,
             block_size, 'w_key', n_layer, max_timestep
         )
         self.commit = commit
+        self.use_key_energy = use_key_energy
 
 
 class AutoCoT(pl.LightningModule):
     def __init__(
         self,
-        rec_config,
         key_config,
         vq_n_e,
         vq_beta,
         vq_legacy,
         act_config,
-        commit_config,
-        vq_elastic=True,
-        coe_loss_tolerance=1.0,
-        coe_rate_tolerance=0.1,
+        vq_use_contrast=False,
         vq_log=True,
-        vq_persistence=None,
         vq_kmeans_reset=None,
         vq_kmeans_step=None,
         optimizers_config=None,
@@ -188,14 +185,7 @@ class AutoCoT(pl.LightningModule):
         self.scheduler_config = scheduler_config
 
         assert state_dim > 0 and action_dim > 0
-        assert rec_config.n_layer == key_config.n_layer
         self.n_embd = key_config.n_embd
-
-        self.rec_net = RecNet(
-            config=rec_config,
-            state_dim=state_dim,
-            key_dim=key_dim
-        )
 
         # key_net, use for latent key recognition
         self.key_net = KeyNet(
@@ -209,34 +199,14 @@ class AutoCoT(pl.LightningModule):
         # every soft key will be mapped to a hard key in the book using a restrict nearest neighbour
         # which will make sure the indices are close...
 
-        if vq_persistence is not None:
-            persistence = vq_persistence / float(self.key_net.block_size)
-        else:
-            persistence = 1.0
-        print(persistence)
-
-        self.vq_elasitc = vq_elastic
-        if vq_elastic is True:
-            print('use VQElastic')
-            self.key_book = VQElastic(
-                n_e=vq_n_e,
-                e_dim=key_dim,
-                beta=vq_beta,
-                legacy=vq_legacy,
-                log_choice=vq_log,
-                persistence=persistence,
-                coe_loss_tolerance=coe_loss_tolerance,
-                coe_rate_tolerance=coe_rate_tolerance
-            )
-        else:
-            self.key_book = VQNeighbor(
-                n_e=vq_n_e,
-                e_dim=key_dim,
-                beta=vq_beta,
-                legacy=vq_legacy,
-                log_choice=vq_log,
-                persistence=persistence
-            )
+        self.key_book = VQNeighbor(
+            n_e=vq_n_e,
+            e_dim=key_dim,
+            beta=vq_beta,
+            use_contrast=vq_use_contrast,
+            legacy=vq_legacy,
+            log_choice=vq_log,
+        )
 
         if vq_kmeans_reset is not None:
             assert isinstance(vq_kmeans_reset, int)
@@ -254,15 +224,6 @@ class AutoCoT(pl.LightningModule):
         assert act_config.commit is False
         self.act_net = ActCommitNet(
             config=act_config,
-            state_dim=state_dim,
-            action_dim=action_dim,
-            key_dim=key_dim
-        )
-
-        # commit_net, for committing key prediction
-        assert commit_config.commit is True
-        self.commit_net = ActCommitNet(
-            config=commit_config,
             state_dim=state_dim,
             action_dim=action_dim,
             key_dim=key_dim
@@ -314,51 +275,41 @@ class AutoCoT(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         states, timesteps, actions, unified_t, lengths = batch['s'], batch['t'], batch['a'], batch['unified_t'], batch['lengths']
+        if self.act_net.use_key_energy is True:
+            states.requires_grad = True
         zero_ts_mask = torch.eq(unified_t[:, 0], 0)
         # print('zero_ts_mask.shape', zero_ts_mask.shape)
         B, T = states.shape[0], states.shape[1]
 
         # Latent encoding
         # from s[0:T-1], a[0:T-1] get key_soft[0:T-1]
-        key_soft, skip_features = self.key_net(states, timesteps, actions)
-
-        state_recs = self.rec_net(key_soft, skip_features, timesteps)
+        key_soft, state_recs = self.key_net(states, timesteps, actions)
+        # VQ mapping
+        key_hard, loss_dict, indices, var = self.key_book(key_soft)
+        if self.act_net.use_key_energy is True:
+            key_energy = self.key_net.get_key_energy(key_soft, indices)
+            key_energy_grad = torch.autograd.grad(key_energy, states, create_graph=False)
+        else:
+            key_energy_grad = None
 
         # action prediction based on k_hard[0:T-1]
         # from s[0:T-1], a[0:T-2], k_hard[0:T-1] get a[0:T-1]
-        act_preds = self.act_net(states, timesteps, actions, key_soft)
-
-        # commitment
-        # from s[0:T-1], k_hard[0:T-2], a[0:T-2] get k_hard[0:T-1]
-        key_commit_soft = self.commit_net(states, timesteps, actions, key_soft)
+        act_preds = self.act_net(states, timesteps, actions, key_soft, key_energy=key_energy_grad)
 
         # loss: state reconstruction
-        loss_recs, _ = get_loss(state_recs, states, lengths)
+        loss_recs, _ = get_loss(state_recs, states[:, 1:T, ...], lengths - 1)
 
         # loss: action prediction
         loss_preds, losses_preds = get_loss(act_preds, actions, lengths)
         # print(losses_preds.shape)
 
-        # VQ mapping
-        if self.vq_elasitc is True:
-            key_hard, loss_dict, indices, var = \
-                self.key_book(key_soft, flatten_in=False, flatten_out=False,
-                              loss_criteria=losses_preds[:B, :T, ...], zero_ts_mask=zero_ts_mask)
-        else:
-            key_hard, loss_dict, indices, var = self.key_book(key_soft)
-
-        if self.vq_elasitc is True or self.vq_kmeans_reset is None:
+        if self.vq_kmeans_reset is None:
             pass
         else:
             if var == 0 and self.flag_collapse is False:
                 self.flag_collapse = True
             elif var != 0 and self.flag_collapse is True:
                 self.flag_collapse = False
-
-        # loss: commitment
-        loss_commitment = \
-            torch.mean((key_commit_soft - key_soft.detach()) ** 2) + \
-            self.key_book.beta * torch.mean((key_commit_soft.detach() - key_soft) ** 2)
 
         # loss: subgoal
         # Your next key_soft should be more closer to the previous goal
@@ -383,7 +334,7 @@ class AutoCoT(pl.LightningModule):
         #     torch.maximum(torch.abs(key_commit_soft) - 1.0 / self.key_book.n_e, torch.zeros_like(key_commit_soft))
         # loss_key_range = loss_key_range.sum()
 
-        loss = loss_recs + loss_preds + loss_commitment + loss_subgoal + loss_dict  # + loss_key_range * 0.1
+        loss = loss_recs + loss_preds + loss_subgoal + loss_dict  # + loss_key_range * 0.1
 
         # loss key_book choice variation
         if var is not None:
@@ -396,7 +347,6 @@ class AutoCoT(pl.LightningModule):
                 'pre': loss_preds,
                 'sub': loss_subgoal,
                 # 'k_r': loss_key_range,
-                'com': loss_commitment,
                 'dic': loss_dict,
             }, prog_bar=True, on_step=True, on_epoch=True
         )
@@ -447,14 +397,14 @@ class AutoCoT(pl.LightningModule):
 
         # special case the position embedding parameter in the root GPT module as not decayed
         # NEED MODIFICATION
-        no_decay.add('rec_net.local_pos_emb')
-        no_decay.add('rec_net.global_pos_emb')
+        # no_decay.add('rec_net.local_pos_emb')
+        # no_decay.add('rec_net.global_pos_emb')
         no_decay.add('key_net.local_pos_emb')
         no_decay.add('key_net.global_pos_emb')
         no_decay.add('act_net.local_pos_emb')
         no_decay.add('act_net.global_pos_emb')
-        no_decay.add('commit_net.local_pos_emb')
-        no_decay.add('commit_net.global_pos_emb')
+        # no_decay.add('commit_net.local_pos_emb')
+        # no_decay.add('commit_net.global_pos_emb')
 
 
         # validate that we considered every parameter

@@ -200,37 +200,55 @@ class VQ3(nn.Module):
 
 
 class VQNeighbor(nn.Module):
-    def __init__(self, n_e, e_dim, beta, legacy=False, log_choice=True, persistence=None):
+    def __init__(self, n_e, e_dim, beta, use_contrast=False, legacy=False, log_choice=True):
         super().__init__()
         self.n_e = n_e
         self.e_dim = e_dim
 
         self.beta = beta
+
+        self.use_contrast = use_contrast
         self.legacy = legacy
         self.log_choice = log_choice
-        self.min_indices = -1
 
         self.embedding = nn.Embedding(1 + n_e, e_dim)
         self.embedding.weight.data.uniform_(-1.0 / n_e, 1.0 / n_e)
 
         self.register_buffer('arranged_mask', torch.arange(n_e + 1)[:, None])
 
-        # persistence: use for long time policy
-        if persistence is not None:
-            # should be a float point between (0.0, 1.0)
-            self.persistence = persistence
-        else:
-            self.persistence = 0.0
+    def get_loss_dispersion(self):
+        d = torch.sum(self.embedding.weight ** 2, dim=1, keepdim=True) + \
+            torch.sum(self.embedding.weight ** 2, dim=1) - 2 * \
+            torch.einsum('bd,dn->bn', self.embedding.weight, rearrange(self.embedding.weight, 'n d -> d n'))
+        print('in get_loss_dispersion d.shape =', d.shape)
+        loss_dispersion = d.sum() / (self.n_e * (self.n_e - 1))
+        return loss_dispersion
 
-    def forward(self, z, flatten_in=False, flatten_out=False):
+    def get_loss_contrast(self, z, ind, book):
+        z_q = book[ind]
+        loss_indices = torch.sum((z - z_q) ** 2, dim=-1)
+        loss_all = torch.sum((z.unsqueeze(2) - book.view(1, 1, -1, self.e_dim)) ** 2, dim=-1)
+        loss_contrast = loss_indices.unsqueeze(-1) - loss_all + (1E-6 / self.n_e)
+        loss_contrast = torch.maximum(loss_contrast, torch.zeros_like(loss_contrast))
+        return loss_contrast.mean()
+
+    def get_key_energy(self, key_soft, indices):
+        # key_soft (B, T, self.e_dim)
+        # indices (B, T)
+        key_here = self.select_from_index(indices)
+        key_next = self.select_from_index(indices + 1)
+        key_energy_mat = \
+            torch.sum((key_soft - key_here), dim=-1) ** 2 \
+            - torch.sum((key_soft - key_next), dim=-1) ** 2
+        print('key_energy_mat.shape', key_energy_mat.shape)
+        key_energy = key_energy_mat.sum()  # mean?
+        return key_energy
+
+    def forward(self, z, flatten_out=False, zero_ts_mask=None):
         # z shape (bs, T, e_dim)
-        B, T = z.shape[0], z.shape[1]
-
         z = z.contiguous()
-        if flatten_in is False:
-            z_flattened = z.view(-1, self.e_dim)  # (bs * T, e_dim)
-        else:
-            z_flattened = z
+        B, T = z.shape[0], z.shape[1]
+        z_flattened = z.view(-1, self.e_dim)  # (bs * T, e_dim)
 
         # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
         d = torch.sum(z_flattened ** 2, dim=1, keepdim=True) + \
@@ -245,7 +263,10 @@ class VQNeighbor(nn.Module):
             min=0,
             max=(self.n_e - 1)
         )
-        coe_persistence = torch.zeros(size=(B, 1), dtype=torch.float32, device=d.device)
+        if zero_ts_mask is not None:
+            encoding_indices = torch.where(zero_ts_mask, 0, encoding_indices)
+
+        encoding_indices = encoding_indices.unsqueeze(1)
 
         # for the rest timestep, they will only select between form k_hard and its succesive key k_hard+
         # e.g. when your hard key is #1 at context timestep 0,
@@ -257,29 +278,32 @@ class VQNeighbor(nn.Module):
             d_here = torch.gather(input=d_t, dim=1, index=ind_here)
             ind_next = torch.clip(ind_here + 1, min=0, max=(self.n_e - 1))
             d_next = torch.gather(input=d_t, dim=1, index=ind_next)
-            d_choice_mask = torch.less_equal(d_here, d_next - coe_persistence)
+            d_choice_mask = torch.less_equal(d_here, d_next)
             ind_new = torch.where(d_choice_mask, ind_here, ind_next)
-            coe_persistence = torch.where(d_choice_mask, coe_persistence + self.persistence / float(self.n_e), 0.0)
             encoding_indices = torch.cat([encoding_indices, ind_new], dim=1)
 
         z_q = self.embedding(encoding_indices.view(-1)).view(z.shape)
 
         # loss for embedding
         if not self.legacy:
-            # loss = \
-            #     self.beta * torch.mean((z_q.detach() - z) ** 2) + \
-            #     torch.mean((z_q - z.detach()) ** 2)
-            loss = \
-                self.beta * self.get_loss_contrast(z, encoding_indices, self.embedding.weight.data.detach()) + \
-                self.get_loss_contrast(z.detach(), encoding_indices, self.embedding.weight.data)
+            if self.use_contrast is False:
+                loss = \
+                    self.beta * torch.mean((z_q.detach() - z) ** 2) + \
+                    torch.mean((z_q - z.detach()) ** 2)
+            else:
+                loss = \
+                    self.beta * self.get_loss_contrast(z, encoding_indices, self.embedding.weight.data.detach()) + \
+                    self.get_loss_contrast(z.detach(), encoding_indices, self.embedding.weight.data)
 
         else:
-            # loss = \
-            #     torch.mean((z_q.detach() - z) ** 2) + \
-            #     self.beta * torch.mean((z_q - z.detach()) ** 2)
-            loss = \
-                self.get_loss_contrast(z, encoding_indices, self.embedding.weight.data.detach()) + \
-                self.beta * self.get_loss_contrast(z.detach(), encoding_indices, self.embedding.weight.data)
+            if self.use_contrast is False:
+                loss = \
+                    torch.mean((z_q.detach() - z) ** 2) + \
+                    self.beta * torch.mean((z_q - z.detach()) ** 2)
+            else:
+                loss = \
+                    self.get_loss_contrast(z, encoding_indices, self.embedding.weight.data.detach()) + \
+                    self.beta * self.get_loss_contrast(z.detach(), encoding_indices, self.embedding.weight.data)
 
         # preserve gradients
         z_q = z + (z_q - z).detach()
@@ -289,8 +313,9 @@ class VQNeighbor(nn.Module):
             encoding_indices = encoding_indices.reshape(z_q.shape[0], z_q.shape[1])  # (B, T)
 
         if self.log_choice is True:
-            self.min_indices = torch.min(encoding_indices)
-            v = torch.max(encoding_indices) - self.min_indices
+            min_indices, _ = torch.min(encoding_indices, dim=1)
+            max_indices, _ = torch.max(encoding_indices, dim=1)
+            v = torch.max(max_indices - min_indices)
             return z_q, loss, encoding_indices, v
         else:
             return z_q, loss, encoding_indices, None
@@ -302,43 +327,11 @@ class VQNeighbor(nn.Module):
         else:
             indices_flattened = indices
         z_out = self.embedding(indices_flattened)
-        z_out = z_out.view(indices.shape[0], indices.shape[1], self.e_dim)
+        if flatten_in is False:
+            z_out = z_out.view(indices.shape[0], indices.shape[1], self.e_dim)
 
         return z_out
 
-    def get_loss_contrast(self, z, ind, book):
-        z_q = book[ind]
-        loss_indices = torch.sum((z - z_q) ** 2, dim=-1)
-        loss_all = torch.sum((z.unsqueeze(2) - book.view(1, 1, -1, self.e_dim)) ** 2, dim=-1)
-        loss_contrast = loss_indices.unsqueeze(-1) - loss_all + (1E-6 / self.n_e)
-        loss_contrast = torch.maximum(loss_contrast, torch.zeros_like(loss_contrast))
-        return loss_contrast.mean()
-
-
-    def get_explore_indices(self, input, indices):
-        with torch.no_grad():
-            input_flattened = input.view(-1)[:, None]
-            expanded_indices = (indices.view(-1))[None].expand(self.n_e + 1, -1)
-            mask = (expanded_indices == self.arranged_mask).to(input.dtype)
-
-            label_cnt = mask.sum(-1, keepdim=True)  # number of data in every label
-            label_sum = mask @ input_flattened  # sum in every label
-            label_square_sum = mask @ (input_flattened * input_flattened)  # sum of square in every label
-
-            label_mean = label_sum / label_cnt  # mean in every label
-            label_var = label_square_sum / (label_cnt - 1.0) - (label_sum * label_sum) / (label_cnt * (label_cnt - 1.0))
-            # (estimation of) variation in every label
-            torch.nan_to_num_(label_mean)
-            torch.nan_to_num_(label_var)
-
-            # higher than (mean + std) is intolerable
-            upper_bound = label_mean[indices] + torch.sqrt(label_var)[indices]
-            explore_mask = (upper_bound <= input)
-
-            # thus these key state latents will try to become next one
-            explore_indices = torch.clip(indices + explore_mask, min=0, max=self.n_e - 1)
-
-            return explore_indices
 
 class VQElastic(nn.Module):
     def __init__(self, n_e, e_dim, beta, legacy=False, log_choice=True, persistence=None,

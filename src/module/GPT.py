@@ -151,17 +151,7 @@ class BlockLayers(nn.Module):
 class KeyNet(nn.Module):
     """
     KeyNet
-    We try to recognize k[0:(t-1)] from s[0:(t-1)], a[0:(t-1)].
-    (
-        The best model maybe to recognize k(t-1) from s[0:(t-1)],k[0:(t-2)],a[0:(t-1)]
-        But it seems that we have to do it auto-regression-ly:
-        s0,a0 -> k0
-        s0,k0,a0,s1,a1 -> k1
-        s0,k0,a0,s1,k1,a1,s2,a2 -> k2
-        ...
-        Which is kind of inefficient.
-        (But this process often happens in RL, thinking of what you're doing when you're using Policy Gradient...)
-    )
+    We try to recognize k_s[0:(t-1)] from s[0:(t-1)], a[0:(t-2)].
     """
     def __init__(self, config, state_dim=-1, action_dim=-1, key_dim=-1):
         super().__init__()
@@ -188,8 +178,10 @@ class KeyNet(nn.Module):
         self.blocks = BlockLayers(config)
 
         self.ln = nn.LayerNorm(config.n_embd)
-        # Key predictor
+
+        # Key soft predictor & state predictor
         self.key_predictor = MLP(config.n_embd, key_dim, hidden_dims=[256, 256])
+        self.state_predictor = MLP(config.n_embd, state_dim, hidden_dims=[256, 256])
 
         # print('init module in BasicNet')
         self.apply(self._init_weights)
@@ -217,15 +209,10 @@ class KeyNet(nn.Module):
         token_embeddings[:, :(T*2):2, :] = state_embeddings
 
         if actions is not None:
-            if actions.shape[1] >= T:
-                # We have last action
-                action_embeddings = self.action_encoder(actions[:, :T])
-                token_embeddings[:, 1:(T*2):2, :] = action_embeddings
-            else:
-                # last states situation (finish, no more action...)
-                assert actions.shape[1] == (T - 1)
-                action_embeddings = self.action_encoder(actions[:, :(T-1)])
-                token_embeddings[:, 1:(T*2-1):2, :] = action_embeddings
+            # action embeddings in token
+            assert actions.shape[1] >= (T - 1)
+            action_embeddings = self.action_encoder(actions[:, :(T-1)])
+            token_embeddings[:, 1:(T*2-1):2, :] = action_embeddings
 
         # Set up position embeddings similar to that in Decision Transformer.
         global_pos_emb = torch.repeat_interleave(self.global_pos_emb, B, dim=0)
@@ -236,18 +223,15 @@ class KeyNet(nn.Module):
 
         x = token_embeddings + pos_emb
 
-        key_emb = self.drop(x)
-        key_emb, skip_features = self.blocks(key_emb)
-        key_emb = self.ln(key_emb)
-        key_emb = self.key_predictor(key_emb)
+        x = self.drop(x)
+        x, skip_features = self.blocks(x)
+        x = self.ln(x)
 
-        # finally output, then they will be send to key_book to select out suitable
-        # key states embedding vectors in the code book
-        key_soft = key_emb[:, 1:(2*T):2, :]
-        for i in range(len(skip_features)):
-            skip_features[i] = skip_features[i][:, :(T*2):2, :]
+        key_soft = self.key_predictor(x[:, 0:(2*T):2, :])
+        # only reconstruct s1, s2, ..., s(T-1)
+        state_recs = self.state_predictor(x[:, 1:(2*T-2):2, :])
 
-        return key_soft, skip_features
+        return key_soft, state_recs
 
 
 class RecNet(nn.Module):
@@ -324,12 +308,16 @@ class ActCommitNet(nn.Module):
     def __init__(self, config, state_dim=-1, action_dim=-1, key_dim=-1):
         super().__init__()
 
-        assert state_dim > 0 and action_dim > 0 and key_dim > 0
+        assert state_dim > 0 and action_dim > 0
+        assert config.use_key_energy or key_dim > 0
         assert config.attn_type == 'w_key'
+
         self.config = config
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.key_dim = key_dim
+        self.use_key_energy = config.use_key_energy
+
         self.block_size = config.block_size * 3
 
         self.commit = config.commit  # use it as CommitNet or ActNet, True will be CommitNet
@@ -340,7 +328,10 @@ class ActCommitNet(nn.Module):
         # State embeddings & Action embeddings & Key embeddings
         self.state_encoder = MLP(state_dim, config.n_embd, hidden_dims=[256])
         self.action_encoder = MLP(action_dim, config.n_embd, hidden_dims=[256])
-        self.key_encoder = MLP(key_dim, config.n_embd, hidden_dims=[256])
+        if config.use_key_energy:
+            self.key_encoder = MLP(key_dim + state_dim, config.n_embd, hidden_dims=[256])
+        else:
+            self.key_encoder = MLP(key_dim, config.n_embd, hidden_dims=[256])
 
         # embedding dropout
         self.drop = nn.Dropout(config.embd_pdrop)
@@ -369,7 +360,7 @@ class ActCommitNet(nn.Module):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
-    def forward(self, states, timesteps, actions=None, keys=None):
+    def forward(self, states, timesteps, actions=None, keys=None, key_energy=None):
         B, T = states.shape[0], states.shape[1]
         state_embeddings = self.state_encoder(states)
         token_embeddings = torch.zeros([B, T*3, self.config.n_embd], dtype=torch.float32, device=states.device)
@@ -378,7 +369,11 @@ class ActCommitNet(nn.Module):
         if keys is not None:
             # key is None when at s0, committing, since keys are from KeyNet + KeyBook
             # keys should not be None (???????)
-            key_embeddings = self.key_encoder(keys)
+            if key_energy is not None:
+                key_embeddings = torch.cat([keys, key_energy], dim=-1)
+            else:
+                key_embeddings = keys
+            key_embeddings = self.key_encoder(key_embeddings)
             token_embeddings[:, 1:(T*3):3, :] = key_embeddings
 
         if actions is not None:
