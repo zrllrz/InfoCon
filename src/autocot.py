@@ -297,7 +297,7 @@ class AutoCoT(pl.LightningModule):
         act_preds = self.act_net(states, timesteps, actions, key_soft, key_energy=key_energy_grad)
 
         # loss: state reconstruction
-        loss_recs, _ = get_loss(state_recs, states[:, 1:T, ...], lengths - 1)
+        loss_recs, _ = get_loss(state_recs, states[:, 1:, ...], lengths - 1)
 
         # loss: action prediction
         loss_preds, losses_preds = get_loss(act_preds, actions, lengths)

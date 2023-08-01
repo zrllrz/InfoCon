@@ -220,9 +220,17 @@ class VQNeighbor(nn.Module):
         d = torch.sum(self.embedding.weight ** 2, dim=1, keepdim=True) + \
             torch.sum(self.embedding.weight ** 2, dim=1) - 2 * \
             torch.einsum('bd,dn->bn', self.embedding.weight, rearrange(self.embedding.weight, 'n d -> d n'))
-        print('in get_loss_dispersion d.shape =', d.shape)
-        loss_dispersion = d.sum() / (self.n_e * (self.n_e - 1))
-        return loss_dispersion
+        d_logit = torch.exp(torch.subtract(input=torch.zeros_like(d), other=d))
+        torch.nan_to_num_(d_logit)
+        d_logit = torch.where(torch.isinf(d_logit), torch.zeros_like(d_logit), d_logit)
+
+        print('in get_loss_dispersion d_logit.shape =', d_logit.shape)
+        loss_dispersion = d_logit.sum() / (self.n_e * (self.n_e - 1))
+        return loss_dispersion + \
+               torch.maximum(
+                   torch.abs(self.embedding.weight) - 1.0 / self.key_book.n_e,
+                   torch.zeros_like(self.embedding.weight)
+               )
 
     def get_loss_contrast(self, z, ind, book):
         z_q = book[ind]
@@ -289,21 +297,25 @@ class VQNeighbor(nn.Module):
             if self.use_contrast is False:
                 loss = \
                     self.beta * torch.mean((z_q.detach() - z) ** 2) + \
-                    torch.mean((z_q - z.detach()) ** 2)
+                    torch.mean((z_q - z.detach()) ** 2) + \
+                    self.get_loss_dispersion()
             else:
                 loss = \
                     self.beta * self.get_loss_contrast(z, encoding_indices, self.embedding.weight.data.detach()) + \
-                    self.get_loss_contrast(z.detach(), encoding_indices, self.embedding.weight.data)
+                    self.get_loss_contrast(z.detach(), encoding_indices, self.embedding.weight.data) + \
+                    self.get_loss_dispersion()
 
         else:
             if self.use_contrast is False:
                 loss = \
                     torch.mean((z_q.detach() - z) ** 2) + \
-                    self.beta * torch.mean((z_q - z.detach()) ** 2)
+                    self.beta * torch.mean((z_q - z.detach()) ** 2) + \
+                    self.get_loss_dispersion()
             else:
                 loss = \
                     self.get_loss_contrast(z, encoding_indices, self.embedding.weight.data.detach()) + \
-                    self.beta * self.get_loss_contrast(z.detach(), encoding_indices, self.embedding.weight.data)
+                    self.beta * self.get_loss_contrast(z.detach(), encoding_indices, self.embedding.weight.data) + \
+                    self.get_loss_dispersion()
 
         # preserve gradients
         z_q = z + (z_q - z).detach()
