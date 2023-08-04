@@ -4,8 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from module.VQ import VQNeighbor, VQElastic
-from module.GPT import KeyNet, ActCommitNet, RecNet
+from module.VQ import VQNeighbor, VQNeighbor2, VQElastic
+from module.GPT import KeyNet, ActCommitNet, ENet, MLP
 
 import pytorch_lightning as pl
 
@@ -14,99 +14,7 @@ from lr_scheduler import CosineAnnealingLRWarmup
 
 from einops import rearrange
 
-
-def mse_loss_with_weights(preds, targets, weights=None):
-    losses = torch.mean((preds - targets) ** 2, -1)
-    if weights is None:
-        return torch.mean(losses), losses
-    else:
-        assert losses.shape == weights.shape, losses.shape
-        return torch.mean(losses * weights), losses
-
-
-def get_loss(preds, targets, lengths):
-    # If we have sequences of varied lengths, use masks so we do not compute loss
-    # over padded values. If we set max_seq_length=min_seq_length, then it should
-    # not matter since all sequences have the same length.
-    B = preds.shape[0]
-    max_len = torch.max(lengths)  # Max length of the current mini-batch.
-    lengths = lengths[:, None]  # B x 1
-    temp = torch.arange(0, max_len)[None].expand(B, -1).cuda()  # B x max_len
-    masks = torch.less(temp, lengths.expand(B, max_len)).float()  # B x max_len
-    # (temp < lengths.expand(B, max_len)).float()  # B x max_len
-
-    loss, lossess = mse_loss_with_weights(
-        preds.reshape(-1, preds.size(-1)),
-        targets.reshape(-1, targets.size(-1)),
-        masks.reshape(-1))
-    return loss, lossess.reshape(B, -1)
-
-
-def key_states_movement_loss(key_hard_plus, key_commit, key_commit_next, marginal):
-    return F.triplet_margin_loss(
-        anchor=key_hard_plus,
-        positive=key_commit_next,
-        negative=key_commit,
-        margin=marginal,
-        p=2.0
-    )
-
-
-def init_centroids(datas, n_centroids):
-    N, D = datas.shape
-    i0 = torch.randint(0, N, (1,))[0]
-    cent_init = datas[i0][None, :]
-    for _ in range(n_centroids - 1):
-        d = torch.sum(datas ** 2, dim=1, keepdim=True) + \
-            torch.sum(cent_init ** 2, dim=1) - 2 * \
-            torch.einsum('bd,dn->bn', datas, rearrange(cent_init, 'n d -> d n'))
-
-        d_min = d.min(dim=1)[0] + 1e-5
-        d_min = torch.where(torch.isnan(d_min), torch.zeros_like(d_min), d_min)
-        d_min = torch.where(torch.isinf(d_min), torch.zeros_like(d_min), d_min)
-        d_min = torch.where(torch.less(d_min, 0.0), torch.zeros_like(d_min), d_min)
-        d_min_sum = d_min.sum()
-
-        if d_min_sum == 0.0 or torch.isnan(d_min_sum) or torch.isinf(d_min_sum):
-            i = torch.randint(0, N, (1,))[0]
-        else:
-            i = d_min.multinomial(num_samples=1)[0]
-
-        cent_init = torch.cat([cent_init, datas[i][None, :]], dim=0)
-    return cent_init
-
-
-def init_centroids_neighbor(datas, unified_t, n_centroids):
-    # datas: (B*T, e_dim), key_soft
-    # unified_t: (B*T), unified timesteps
-    # n_centroids: number of centroids
-    N, D = datas.shape
-    i0 = torch.randint(0, N, (1,))[0]
-    unified_t_unsq = unified_t.view(-1, 1)
-    cent_init_ind = torch.tensor([i0])
-    cent_init_u_t = unified_t[i0].view(1)
-    for _ in range(n_centroids - 1):
-        d = torch.abs(unified_t_unsq - cent_init_u_t)
-        d_min = d.min(dim=1)[0] + 1e-5
-        d_min = torch.where(torch.isnan(d_min), torch.zeros_like(d_min), d_min)
-        d_min = torch.where(torch.isinf(d_min), torch.zeros_like(d_min), d_min)
-        d_min = torch.where(torch.less(d_min, 0.0), torch.zeros_like(d_min), d_min)
-        d_min_sum = d_min.sum()
-
-        if d_min_sum == 0.0 or torch.isnan(d_min_sum) or torch.isinf(d_min_sum):
-            i = torch.randint(0, N, (1,))[0]
-        else:
-            i = d_min.multinomial(num_samples=1)[0]
-        cent_init_ind = torch.cat([cent_init_ind, torch.tensor([i])], dim=0)
-        cent_init_u_t = torch.cat([cent_init_u_t, unified_t_unsq[i]], dim=0)
-
-
-    # sorted by unified time step!!!!!!
-    _, sorted_sub_ind = torch.sort(cent_init_u_t)
-    cent_init_ind = cent_init_ind[sorted_sub_ind.to(cent_init_ind.device)]
-    cent_init_datas = datas[cent_init_ind]
-
-    return cent_init_datas
+from util import anomaly_score, cos_anomaly_score, mse_loss_with_weights, get_loss, init_centroids, init_centroids_neighbor
 
 
 class RootConfig:
@@ -132,6 +40,17 @@ class KeyNetConfig(RootConfig):
             n_embd, n_head,
             attn_pdrop, resid_pdrop, embd_pdrop,
             block_size, 'wo_key', n_layer, max_timestep
+        )
+
+
+class ENetConfig(RootConfig):
+    def __init__(self, n_embd, n_head,
+                 attn_pdrop, resid_pdrop, embd_pdrop,
+                 block_size, n_layer, max_timestep):
+        super().__init__(
+            n_embd, n_head,
+            attn_pdrop, resid_pdrop, embd_pdrop,
+            block_size, '-', n_layer, max_timestep
         )
 
 
@@ -164,17 +83,12 @@ class AutoCoT(pl.LightningModule):
     def __init__(
         self,
         key_config,
-        vq_n_e,
-        vq_beta,
-        vq_legacy,
         act_config,
-        vq_use_contrast=False,
-        vq_log=True,
-        vq_kmeans_reset=None,
-        vq_kmeans_step=None,
+        e_config,
+        vq_n_e=10,
+        vq_legacy_cluster=0.2,
         optimizers_config=None,
         scheduler_config=None,
-        subgoal_marginal=1e-6,
         state_dim=-1,
         action_dim=-1,
         key_dim=-1
@@ -199,155 +113,98 @@ class AutoCoT(pl.LightningModule):
         # every soft key will be mapped to a hard key in the book using a restrict nearest neighbour
         # which will make sure the indices are close...
 
-        self.key_book = VQNeighbor(
+        self.key_book = VQNeighbor2(
             n_e=vq_n_e,
             e_dim=key_dim,
-            beta=vq_beta,
-            use_contrast=vq_use_contrast,
-            legacy=vq_legacy,
-            log_choice=vq_log,
+            legacy_cluster=vq_legacy_cluster,
         )
-
-        if vq_kmeans_reset is not None:
-            assert isinstance(vq_kmeans_reset, int)
-            assert isinstance(vq_kmeans_step, int)
-            self.flag_collapse = False
-            self.kmeans_idx = 0
-            self.vq_kmeans_reset = vq_kmeans_reset
-            self.vq_kmeans_step = vq_kmeans_step
-        else:
-            self.kmeans_idx = None
-            self.vq_kmeans_reset = None
-            self.vq_kmeans_step = None
 
         # act_net, for action prediction
         assert act_config.commit is False
+        print(act_config.use_key_energy)
         self.act_net = ActCommitNet(
             config=act_config,
             state_dim=state_dim,
             action_dim=action_dim,
             key_dim=key_dim
         )
-
-        self.goalLoss = nn.TripletMarginLoss(
-            margin=subgoal_marginal,
-            p=2.0,
-            reduction='mean'
+        self.e_net = ENet(
+            config=e_config,
+            state_dim=state_dim,
+            action_dim=action_dim
         )
-
-    @torch.no_grad()
-    def kmeans_reset(self, key_soft, unified_t=None):
-        print('kmeans resetting...')
-        # arranged_mask = torch.arange(self.key_book.n_e + 1)[:, None]
-        # arranged_mask = arranged_mask.to(self.device)
-        arranged_mask = self.key_book.arranged_mask
-        key_soft_flatten = key_soft.view(-1, self.n_embd)
-
-        # kmeans++ initialization
-        if unified_t is not None:
-            self.key_book.embedding.weight.data = \
-                init_centroids_neighbor(key_soft_flatten, unified_t.view(-1), self.key_book.n_e + 1)
-        else:
-            self.key_book.embedding.weight.data = \
-                init_centroids(key_soft_flatten, self.key_book.n_e + 1)
-
-        # Do kmeans algorithm to reset
-        for _ in range(self.vq_kmeans_step):
-            _, _, indices, _ = self.key_book(key_soft)
-            indices_flatten = indices.view(-1)
-            expanded_indices = indices_flatten[None].expand(self.key_book.n_e + 1, -1)
-            mask = torch.eq(expanded_indices, arranged_mask).to(key_soft_flatten.dtype)
-            c_grad = mask @ key_soft_flatten / mask.sum(-1)[..., :, None]
-            torch.nan_to_num_(c_grad)
-            self.key_book.embedding.weight.data = c_grad
-        print('kmeans resetting done')
-
-    @torch.no_grad()
-    def on_train_batch_start(self, batch, batch_idx):
-        if self.vq_elasitc is True or self.vq_kmeans_reset is None:
-            return
-        else:
-            if self.flag_collapse or (self.kmeans_idx % self.vq_kmeans_reset == 0):
-                states, timesteps, actions, unified_t, _ = batch['s'], batch['t'], batch['a'], batch['unified_t'], batch['lengths']
-                key_soft, _ = self.key_net(states, timesteps, actions)
-                self.kmeans_reset(key_soft, unified_t=unified_t)
-            self.kmeans_idx += 1
 
     def training_step(self, batch, batch_idx):
         states, timesteps, actions, unified_t, lengths = batch['s'], batch['t'], batch['a'], batch['unified_t'], batch['lengths']
-        if self.act_net.use_key_energy is True:
-            states.requires_grad = True
+        states.requires_grad = True
         zero_ts_mask = torch.eq(unified_t[:, 0], 0)
-        # print('zero_ts_mask.shape', zero_ts_mask.shape)
         B, T = states.shape[0], states.shape[1]
 
         # Latent encoding
         # from s[0:T-1], a[0:T-1] get key_soft[0:T-1]
         key_soft, state_recs = self.key_net(states, timesteps, actions)
         # VQ mapping
-        key_hard, loss_dict, indices, var = self.key_book(key_soft)
-        if self.act_net.use_key_energy is True:
-            key_energy = self.key_net.get_key_energy(key_soft, indices)
-            key_energy_grad = torch.autograd.grad(key_energy, states, create_graph=False)
-        else:
-            key_energy_grad = None
+        key_hard, encoding_indices, v, loss_here, loss_next, energy, loss_energy_descent = \
+            self.key_book(key_soft, zero_ts_mask=zero_ts_mask)
+
+        energy_grad = torch.autograd.grad(energy, states, create_graph=True, retain_graph=True)[0]
 
         # action prediction based on k_hard[0:T-1]
         # from s[0:T-1], a[0:T-2], k_hard[0:T-1] get a[0:T-1]
-        act_preds = self.act_net(states, timesteps, actions, key_soft, key_energy=key_energy_grad)
+        if self.act_net.use_key_energy:
+            act_preds = self.act_net(states, timesteps, actions, key_soft, key_energy=energy_grad)
+        else:
+            act_preds = self.act_net(states, timesteps, actions, key_soft, key_energy=None)
+
+        # Try to increase mutual information between action and ∂E/∂s
+        eact_preds = self.e_net(energy_grad, timesteps)
 
         # loss: state reconstruction
-        loss_recs, _ = get_loss(state_recs, states[:, 1:, ...], lengths - 1)
+        l_s_recs, _ = get_loss(state_recs, states[:, 1:, ...], lengths - 1)
 
-        # loss: action prediction
-        loss_preds, losses_preds = get_loss(act_preds, actions, lengths)
+        # loss: action prediction & naive action prediction
+        l_a_preds, ls_a_preds = get_loss(act_preds, actions, lengths)
+        l_ea_preds, ls_ea_preds = get_loss(eact_preds, actions, lengths)
+        l_preds = l_a_preds + l_ea_preds
+
+        # first use ∂(l_a_preds)/∂(key_soft) and ∂(l_ea_preds)/∂(key_soft) to
+        # judge the moving direction of key_soft, you can rely on the direction to decide whether to
+        # move key_soft closer to key_hard_here and key_hard_next
+        key_soft_md = torch.autograd.grad(l_preds, key_soft, create_graph=True, retain_graph=True)[0]
+        key_soft_md = key_soft_md.detach()  # (B, T, key_dim)
+        key_soft_to_here = key_hard - key_soft  # (B, T, key_dim)
+        key_soft_to_here = key_soft_to_here.detach()
+
+        # larger cos means the tendency of updating key_soft will lead to closer to your current cluster
+        # otherwise key_soft is tend to move farther from the current key_hard(_here)
+        # (you can comply the tendency in this situation!!!)
+        key_d_cos = F.cosine_similarity(key_soft_md, key_soft_to_here, dim=-1)
+
+        # a strange activation unit, when cos >= 0.0, normal (agree with the current key_hard(_here) choice)
+        # when cos < 0.0, anomaly, try to move the k_s towards the key_hard_next
+        w_anomaly = cos_anomaly_score(key_d_cos, sharpen=10.0)
+        # print('w_anomaly.shape:', w_anomaly.shape)
+
         # print(losses_preds.shape)
+        # loss_range = self.key_book.get_loss_structure()
 
-        if self.vq_kmeans_reset is None:
-            pass
-        else:
-            if var == 0 and self.flag_collapse is False:
-                self.flag_collapse = True
-            elif var != 0 and self.flag_collapse is True:
-                self.flag_collapse = False
+        # clustering loss
 
-        # loss: subgoal
-        # Your next key_soft should be more closer to the previous goal
-        # k_hard(i-1)
-        # k_soft(i-1)   k_soft(i)
-        #             \     | (more closer!)
-        #               k_hard(i-1)+
-        #               (your goal at (i - 1), when you take action to transmit from k_hard(i-1) to k_hard(i-1)+)
-
-        loss_subgoal = self.goalLoss(
-            anchor=self.key_book.select_from_index(indices=indices[:, :-1] + 1).detach(),
-            positive=key_soft[:, 1:, :],
-            negative=key_soft[:, :-1, :].detach(),
-        ) + self.key_book.beta * self.goalLoss(
-            anchor=self.key_book.select_from_index(indices=indices[:, :-1] + 1),
-            positive=key_soft[:, 1:, :].detach(),
-            negative=key_soft[:, :-1, :],
-        )
-        #
-        # loss_key_range = \
-        #     torch.maximum(torch.abs(key_soft) - 1.0 / self.key_book.n_e, torch.zeros_like(key_soft)) + \
-        #     torch.maximum(torch.abs(key_commit_soft) - 1.0 / self.key_book.n_e, torch.zeros_like(key_commit_soft))
-        # loss_key_range = loss_key_range.sum()
-
-        loss = loss_recs + loss_preds + loss_subgoal + loss_dict  # + loss_key_range * 0.1
-
-        # loss key_book choice variation
-        if var is not None:
-            self.log('choice_var', var, prog_bar=True, on_step=True, on_epoch=True)
+        loss = \
+            l_preds + l_s_recs \
+            + ((1.0 - w_anomaly) * loss_here).mean() + (w_anomaly * loss_next).mean() \
+            + loss_energy_descent  # + loss_range * self.key_book.coe_structure
 
         # log the loss-es
         self.log_dict(
             {
-                'rec': loss_recs,
-                'pre': loss_preds,
-                'sub': loss_subgoal,
-                # 'k_r': loss_key_range,
-                'dic': loss_dict,
+                'v': v,
+                '?s': l_s_recs,
+                '?a': l_a_preds,
+                '?ea': l_ea_preds,
+                '∂E': loss_energy_descent,
+                '©': loss_here.mean(),
+                'mab': torch.max(w_anomaly),
             }, prog_bar=True, on_step=True, on_epoch=True
         )
         return loss
@@ -364,11 +221,7 @@ class AutoCoT(pl.LightningModule):
 
         # key_net label
         key_soft, _ = self.key_net(states, timesteps, actions)
-        if self.vq_elasitc is True:
-            _, _, label, _ = self.key_book(key_soft, flatten_in=False, flatten_out=False,
-                                           loss_criteria=None, zero_ts_mask=None)
-        else:
-            _, _, label, _ = self.key_book(key_soft)
+        label, _, _ = self.key_book.get_key_soft_indices(key_soft, zero_ts_mask=None)
         return label[:, -1]
 
     def configure_optimizers(self):
@@ -403,6 +256,8 @@ class AutoCoT(pl.LightningModule):
         no_decay.add('key_net.global_pos_emb')
         no_decay.add('act_net.local_pos_emb')
         no_decay.add('act_net.global_pos_emb')
+        no_decay.add('e_net.local_pos_emb')
+        no_decay.add('e_net.global_pos_emb')
         # no_decay.add('commit_net.local_pos_emb')
         # no_decay.add('commit_net.global_pos_emb')
 

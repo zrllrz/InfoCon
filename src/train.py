@@ -12,7 +12,8 @@ from data import MS2Demos, get_padding_fn
 from autocot import (
     KeyNetConfig,
     ActCommitNetConfig,
-    # RecNetConfig,
+    RecNetConfig,
+    ENetConfig,
     AutoCoT
 )
 from lr_scheduler import CosineAnnealingLRWarmup
@@ -55,34 +56,20 @@ def parse_args():
 
     parser.add_argument('--vq_n_e', type=int, default=100,
                         help="How many kinds of keys in the key_book")
-    parser.add_argument('--vq_beta', type=str, default='0.2',
-                        help="Coefficient in the VQ loss")
-    parser.add_argument('--vq_legacy', type=bool, default=False,
-                        help="Place that add vq_beta, should always be False")
-    # parser.add_argument('--vq_elastic', type=bool, default=True,
-    #                     help="Place that add vq_beta, should always be False")
-    # parser.add_argument('--coe_loss_tolerance', type=str, default='1.0',
-    #                     help="Place that add vq_beta, should always be False")
-    # parser.add_argument('--coe_rate_tolerance', type=str, default='0.1',
-    #                     help="Place that add vq_beta, should always be False")
-    parser.add_argument('--vq_use_contrast', type=bool, default=False,
-                        help="if True, use contrastive loss in VQ")
-    parser.add_argument('--vq_log', type=bool, default=True,
-                        help="log variation of indices choice")
-    # parser.add_argument('--vq_persistence', type=str, default='none',
-    #                     help="stricter distance coe")
-    parser.add_argument('--vq_kmeans_reset', type=int, default=None,
-                        help="steps interval of resetting embedding using k-means")
-    parser.add_argument('--vq_kmeans_step', type=int, default=None,
-                        help="interation steps of k-means")
+    parser.add_argument('--vq_legacy_cluster', type=str, default='0.2',
+                        help="coe of commit (k_s -> k_h) for clustering")
+    parser.add_argument('--vq_legacy_energy', type=str, default='0.2',
+                        help="coe of commit (k_h -> k_s) for energy")
+    # parser.add_argument('--vq_decay_energy', type=str, default='0.1', help="decay coe for energy calc")
+    # parser.add_argument('--vq_coe_structure', type=str, default='0.1', help="Coefficient in the VQ loss")
+
     parser.add_argument("--n_act_layer", default=4, type=int,
                         help="Number of attention layers in ActNet")
-    parser.add_argument("--use_key_energy", default=True, type=bool,
+    parser.add_argument("--use_key_energy", action='store_true',
                         help="if True, use key energy gradient to evaluate effect of key states")
-    # parser.add_argument("--n_commit_layer", default=4, type=int,
-    #                     help="Number of attention layers in commit_net")
-    parser.add_argument("--subgoal_marginal", default='1e-6', type=str,
-                        help="Triple loss marginal for sub-goal loss")
+
+    parser.add_argument("--n_e_layer", default=1, type=int,
+                        help="Number of attention layers in EActNet")
 
     # General hyper-parameters regarding module loading and saving
     parser.add_argument("--model_name", default='TEST', type=str, help="Model name (for storing ckpts).")
@@ -119,6 +106,8 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     assert args.model_name != '', 'Should specify --model_name'
+    print(args)
+    input()
     print('Model name:', args.model_name)
 
     print('Preparing Training Data...')
@@ -155,6 +144,8 @@ if __name__ == "__main__":
         n_layer=args.n_key_layer,
         max_timestep=train_dataset.max_steps,
     )
+    print('args.n_iters', args.n_iters)
+    print('args.use_key_energy', args.use_key_energy)
     act_config = ActCommitNetConfig(
         n_embd=args.n_embd,
         n_head=args.n_head,
@@ -166,6 +157,17 @@ if __name__ == "__main__":
         max_timestep=train_dataset.max_steps,
         commit=False,
         use_key_energy=args.use_key_energy
+    )
+
+    e_config = ENetConfig(
+        n_embd=args.n_embd,
+        n_head=args.n_head,
+        attn_pdrop=float(args.dropout),
+        resid_pdrop=float(args.dropout),
+        embd_pdrop=float(args.dropout),
+        block_size=args.context_length,
+        n_layer=args.n_e_layer,
+        max_timestep=train_dataset.max_steps,
     )
 
     optimizer_config = {
@@ -192,15 +194,10 @@ if __name__ == "__main__":
 
     autocot_model = AutoCoT(
         key_config=key_config,
-        vq_n_e=args.vq_n_e,
-        vq_beta=float(args.vq_beta),
-        vq_legacy=args.vq_legacy,
-        vq_log=args.vq_log,
-        vq_use_contrast=args.vq_use_contrast,
-        vq_kmeans_reset=args.vq_kmeans_reset,
-        vq_kmeans_step=args.vq_kmeans_step,
         act_config=act_config,
-        subgoal_marginal=float(args.subgoal_marginal),
+        e_config=e_config,
+        vq_n_e=args.vq_n_e,
+        vq_legacy_cluster=float(args.vq_legacy_cluster),
         optimizers_config=optimizer_config,
         scheduler_config=scheduler_config,
         state_dim=state_dim,

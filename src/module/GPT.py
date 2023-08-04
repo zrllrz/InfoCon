@@ -7,29 +7,16 @@ References:
 (2) https://github.com/kzl/decision-transformer
 """
 
+import sys
+sys.path.append("/home/rzliu/AutoCoT/src/module")
+
 import numpy as np
 import math
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-
-class MLP(nn.Module):
-    def __init__(self, input_dim, output_dim, hidden_dims=[], act_fn='relu'):
-        super().__init__()
-        assert act_fn in ['relu', 'tanh', None, '']
-        dims = [input_dim] + hidden_dims + [output_dim]
-        layers = []
-        for i, j in zip(dims[:-1], dims[1:]):
-            layers.append(nn.Linear(i, j))
-            if act_fn == 'relu':
-                layers.append(nn.ReLU())
-            if act_fn == 'tanh':
-                layers.append(nn.Tanh())
-        self.net = nn.Sequential(*layers[:-1])
-
-    def forward(self, x):
-        return self.net(x)
+from module_util import MLP
 
 
 class GELU(nn.Module):
@@ -234,6 +221,68 @@ class KeyNet(nn.Module):
         return key_soft, state_recs
 
 
+class ENet(nn.Module):
+    def __init__(self, config, state_dim=-1, action_dim=-1):
+        super().__init__()
+
+        assert state_dim > 0 and action_dim > 0
+        assert config.attn_type == '-'  # only try to reconstruct key state back to state
+        self.config = config
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.block_size = config.block_size
+
+        self.local_pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
+        self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep, config.n_embd))
+
+        # key embeddings
+        self.grad_encoder = MLP(state_dim, config.n_embd, hidden_dims=[256])
+
+        # embedding dropout
+        self.drop = nn.Dropout(config.embd_pdrop)
+
+        # Transformer (attention layers)
+        self.blocks = BlockLayers(config)
+        self.ln = nn.LayerNorm(config.n_embd)
+        # State predictor
+        self.action_predictor = MLP(config.n_embd, action_dim, hidden_dims=[256, 256])
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        if isinstance(module, (nn.Linear, nn.Embedding)):
+            module.weight.data.normal_(mean=0.0, std=0.02)
+            if isinstance(module, nn.Linear) and module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
+
+    # (Must) include in skip_feature, to make sure the keys 'loss' some of the information from states
+    def forward(self, state_grads, timesteps):
+        B, T = state_grads.shape[0], state_grads.shape[1]
+        key_embeddings = self.grad_encoder(state_grads)
+
+        # Embeddings for key (action, and key state query) tokens.
+        token_embeddings = key_embeddings
+
+        # Set up position embeddings similar to that in Decision Transformer.
+        global_pos_emb = torch.repeat_interleave(self.global_pos_emb, B, dim=0)
+        timesteps_rp = torch.repeat_interleave(timesteps[:, None], self.config.n_embd, dim=-1)
+        global_pos_emb = torch.gather(global_pos_emb, 1, timesteps_rp.long())  # BS x 1 x D
+        local_pos_emb = torch.repeat_interleave(self.local_pos_emb[:, :T, :], 1, dim=1)
+        pos_emb = global_pos_emb + local_pos_emb
+
+        x = token_embeddings + pos_emb
+
+        x = self.drop(x)
+        x, _ = self.blocks(x)
+        x = self.ln(x)
+        eact_preds = self.action_predictor(x)
+
+        return eact_preds
+
+
 class RecNet(nn.Module):
     def __init__(self, config, state_dim=-1, key_dim=-1):
         super().__init__()
@@ -256,10 +305,8 @@ class RecNet(nn.Module):
 
         # Transformer (attention layers)
         self.blocks = BlockLayers(config)
-
         self.ln = nn.LayerNorm(config.n_embd)
-
-        # State predictor & Action predictor
+        # State predictor
         self.state_predictor = MLP(config.n_embd, state_dim, hidden_dims=[256, 256])
 
         self.apply(self._init_weights)
@@ -274,7 +321,7 @@ class RecNet(nn.Module):
             module.weight.data.fill_(1.0)
 
     # (Must) include in skip_feature, to make sure the keys 'loss' some of the information from states
-    def forward(self, keys, skip_feature, timesteps):
+    def forward(self, keys, timesteps, skip_feature=None):
         B, T = keys.shape[0], keys.shape[1]
         key_embeddings = self.key_encoder(keys)
 

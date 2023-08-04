@@ -2,347 +2,406 @@
 Reference: https://github.com/ritheshkumar95/pytorch-vqvae/blob/master/functions.py
 """
 
+import sys
+sys.path.append("/home/rzliu/AutoCoT/src/module")
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Function
 from einops import rearrange
 
+from module_util import MLP
 
-class VQ2Linear(nn.Module):
-    def __init__(self, n_e, e_dim, beta, legacy=False, log_choice=True):
-        super().__init__()
-        self.n_e = n_e
-        self.n_e_bucket = torch.zeros(size=(n_e,), dtype=torch.int32)
-        self.e_dim = e_dim
 
-        self.beta = beta
-        self.legacy = legacy
-        self.log_choice = log_choice
-
-        self.embedding = nn.Embedding(n_e + 1, e_dim)
-        self.embedding.weight.data.uniform_(-1.0 / n_e, 1.0 / n_e)
-
-    def forward(self, z):
-        # z shape (bs, e_dim)
-        z = z.contiguous()
-
-        # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
-        d = torch.sum(z ** 2, dim=1, keepdim=True) + \
-            torch.sum(self.embedding.weight ** 2, dim=1) - 2 * \
-            torch.einsum('bd,dn->bn', z, rearrange(self.embedding.weight, 'n d -> d n'))
-
-        min_encoding_indices = torch.argmin(d[:, :-1], dim=1)
-
-        z_q = self.embedding(min_encoding_indices).view(z.shape)
-
-        # loss for embedding
-        if not self.legacy:
-            loss = self.beta * torch.mean((z_q.detach() - z) ** 2) + \
-                   torch.mean((z_q - z.detach()) ** 2)
-        else:
-            loss = torch.mean((z_q.detach() - z) ** 2) + self.beta * \
-                   torch.mean((z_q - z.detach()) ** 2)
-
-        # preserve gradients
-        z_q = z + (z_q - z).detach()
-        z_q = z_q.contiguous()
-
-        if self.log_choice is True:
-            v = torch.var(min_encoding_indices.to(dtype=torch.float32))
-            return z_q, loss, min_encoding_indices, v
-        else:
-            return z_q, loss, min_encoding_indices, None
-
-class VQ2(nn.Module):
-    def __init__(self, n_e, e_dim, beta, legacy=False, log_choice=True):
+class VQNeighbor2(nn.Module):
+    def __init__(self, n_e, e_dim, legacy_cluster=0.2):
         super().__init__()
         self.n_e = n_e
         self.e_dim = e_dim
 
-        self.beta = beta
-        self.legacy = legacy
-        self.log_choice = log_choice
-
+        self.legacy_cluster = legacy_cluster
         self.embedding = nn.Embedding(1 + n_e, e_dim)
         self.embedding.weight.data.uniform_(-1.0 / n_e, 1.0 / n_e)
 
-    def forward(self, z, flatten_in=False, flatten_out=False):
-        # z shape (bs, T, e_dim)
-        z = z.contiguous()
-        if flatten_in is False:
-            z_flattened = z.view(-1, self.e_dim)  # (bs * T, e_dim)
-        else:
-            z_flattened = z
+        self.key_to_qe = MLP(input_dim=e_dim, output_dim=e_dim, hidden_dims=[256, 256])
 
-        # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
-        d = torch.sum(z_flattened ** 2, dim=1, keepdim=True) + \
-            torch.sum(self.embedding.weight ** 2, dim=1) - 2 * \
-            torch.einsum('bd,dn->bn', z_flattened, rearrange(self.embedding.weight, 'n d -> d n'))
+        self.register_buffer('arranged_mask', torch.arange(n_e + 1)[:, None])
 
-        min_encoding_indices = torch.argmin(d[:, :-1], dim=1)
-
-        z_q = self.embedding(min_encoding_indices).view(z.shape)
-
-        # loss for embedding
-        if not self.legacy:
-            loss = self.beta * torch.mean((z_q.detach() - z) ** 2) + \
-                   torch.mean((z_q - z.detach()) ** 2)
-        else:
-            loss = torch.mean((z_q.detach() - z) ** 2) + self.beta * \
-                   torch.mean((z_q - z.detach()) ** 2)
-
-        # preserve gradients
-        z_q = z + (z_q - z).detach()
-
-        z_q = z_q.contiguous()
-
-        if flatten_out is False:
-            min_encoding_indices = min_encoding_indices.reshape(z_q.shape[0], z_q.shape[1])
-        # (B, T)
-        if self.log_choice is True:
-            v = torch.var(min_encoding_indices.to(dtype=torch.float32))
-            return z_q, loss, min_encoding_indices, v
-        else:
-            return z_q, loss, min_encoding_indices, None
-
-    def index_select(self, indices, flatten_in=False):
+    def select_from_index(self, indices):
+        # indices (B, T)
+        B, T = indices.shape
         indices = indices.contiguous()
-        if flatten_in is False:
-            indices_flattened = indices.view(-1)  # (bs * T)
-        else:
-            indices_flattened = indices
-        # print(indices_flattened.shape)
-        # print(indices.shape)
-        z_out = self.embedding(indices_flattened)
-        # print(z_out.shape)
-        z_out = z_out.view(indices.shape[0], indices.shape[1], self.e_dim)
-        # print(z_out.shape)
+        indices_flattened = indices.view(-1)  # (bs * T)
+        key_hard = self.embedding(indices_flattened).view(B, T, self.e_dim)
+        return key_hard
 
-        return z_out
+    def get_key_soft_indices(self, key_soft, zero_ts_mask=None):
+        # key_soft: (B, T, self.e_dim)
+        key_soft = key_soft.contiguous()
+        B, T = key_soft.shape[0], key_soft.shape[1]
+        key_soft_flattened = key_soft.view(-1, self.e_dim)  # (bs * T, e_dim)
 
-    # softmax-based commitment loss
-    # def get_soft_commit_loss(self, z_commit_soft, indices):
-    #     z = z_commit_soft.contiguous()
-    #     z_flattened = z.view(-1, self.e_dim)
-    #     d = torch.sum(z_flattened ** 2, dim=1, keepdim=True) + \
-    #         torch.sum(self.embedding.weight ** 2, dim=1) - 2 * \
-    #         torch.einsum('bd,dn->bn', z_flattened, rearrange(self.embedding.weight, 'n d -> d n'))
-    #     d_exp = torch.exp(d)
-    #     d_soft_term = torch.log(torch.add(torch.sum(d_exp, dim=1), 1e-5))
-    #     loss_soft_penalty = torch.sum(d_soft_term)
-    #     return loss_soft_penalty
+        # choosing indices does not need gradient
+        with torch.no_grad():
+            d = torch.sum(key_soft_flattened ** 2, dim=1, keepdim=True) + \
+                torch.sum(self.embedding.weight ** 2, dim=1) - 2 * \
+                torch.einsum('bd,dn->bn', key_soft_flattened, rearrange(self.embedding.weight, 'n d -> d n'))
+            d = d.view(B, T, -1)  # reshape the distance back to (B, T, n_e)
 
+            # First timestep (0 step) in every context will use the nearest key
+            encoding_indices = torch.clip(
+                torch.argmin(d[:, 0, :], dim=1),
+                min=0,
+                max=(self.n_e - 1)
+            )
+            if zero_ts_mask is not None:
+                encoding_indices = torch.where(zero_ts_mask, 0, encoding_indices)
+            encoding_indices = encoding_indices.unsqueeze(1)
 
-class VQ3(nn.Module):
-    def __init__(self, n_e, e_dim, p_change_th=0.8, log_choice=True):
-        super().__init__()
-        self.n_e = n_e
-        self.e_dim = e_dim
-        self.p_change_th = p_change_th
-        self.log_choice = log_choice
+            # for the rest timestep, they will only select between form k_hard and its succesive key k_hard+
+            # e.g. when your hard key is #1 at context timestep 0,
+            #      your hard key is from {#1, #2} at context timestep 1,
+            for t in range(0, T - 1, 1):
+                d_t = d[:, (t + 1), :]
 
-        self.embedding = nn.Embedding(1 + n_e, e_dim)
-        self.embedding.weight.data.uniform_(-1.0 / n_e, 1.0 / n_e)
+                ind_here = encoding_indices[:, t:(t + 1)]
+                d_here = torch.gather(input=d_t, dim=1, index=ind_here)
+                ind_next = torch.clip(ind_here + 1, min=0, max=(self.n_e - 1))
+                d_next = torch.gather(input=d_t, dim=1, index=ind_next)
 
-        print('self.embedding')
-        print(self.embedding.weight)
-        print(self.embedding.weight.shape)
+                d_choice_mask = torch.less_equal(d_here, d_next)
+                ind_new = torch.where(d_choice_mask, ind_here, ind_next)
+                encoding_indices = torch.cat([encoding_indices, ind_new], dim=1)
 
-    def forward(self, p_change):
-        # p_change: (B, T)
-        # when at (i_b, t), it indicates the probability of switching key state
-        B, T = p_change.shape
+        key_hard = self.embedding(encoding_indices.view(-1)).view(key_soft.shape)
+        key_hard.contiguous()
 
-        p_change = p_change.contiguous()
+        min_indices, _ = torch.min(encoding_indices, dim=1)
+        max_indices, _ = torch.max(encoding_indices, dim=1)
+        v = torch.max(max_indices - min_indices)
+        return encoding_indices, key_hard, v
 
-        # We do switch key state when prob is greater than the hyper threshold
-        p_change_signal = (p_change >= self.p_change_th)
-        p_change_signal[:, 0:1] = False  # Do not switch at the very beginning
+    def forward(self, key_soft, zero_ts_mask=None, preserve_grad=True):
+        # key_soft shape (bs, T, self.e_dim)
+        # zero_ts_mask (bs)
 
-        # For switching time step, the first choice prob is p_change, otherwise it is (1.0 - p_change)
-        p_first = torch.where(p_change_signal, p_change, 1.0 - p_change)
+        key_soft = key_soft.contiguous()
+        B, T = key_soft.shape[0], key_soft.shape[1]
+        key_soft_flattened = key_soft.view(-1, self.e_dim)  # (bs * T, e_dim)
 
-        # For indice selection
-        p_change_signal = p_change_signal.type(torch.int64)
+        # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
+        d = torch.sum(key_soft_flattened ** 2, dim=1, keepdim=True) \
+            + torch.sum(self.embedding.weight ** 2, dim=1) \
+            - 2 * torch.einsum('bd,dn->bn', key_soft_flattened, rearrange(self.embedding.weight, 'n d -> d n'))
 
-        # choose out 'first choice'
-        p_ind_first = torch.clip(
-            torch.cumsum(p_change_signal, dim=1),
-            min=0, max=self.n_e - 1
-        )
+        with torch.no_grad():
+            min_indices = torch.argmin(d, dim=1)
 
-        # And regretable 'second choice'
-        # for changing places, 'second choice' is the former key state
-        # For mataining places, 'second choice' is the aiming key state (key state as sub-goal !!!)
-        p_ind_second = torch.clip(
-            torch.where(p_change_signal == 1, p_ind_first - 1, p_ind_first + 1),
-            min=0, max=self.n_e
-        )
+            d = d.view(B, T, self.n_e + 1)
+            # First timestep (0 step) in every context will use the nearest key
+            encoding_indices = torch.clip(
+                torch.argmin(d[:, 0, :], dim=1),
+                min=0,
+                max=(self.n_e - 1)
+            )
+            if zero_ts_mask is not None:
+                encoding_indices = torch.where(zero_ts_mask, 0, encoding_indices)
+            encoding_indices = encoding_indices.unsqueeze(1)
 
-        p_ind_first_flattened = p_ind_first.view(-1)
-        p_ind_second_flattened = p_ind_second.view(-1)
+            # for the rest timestep, they will only select between form k_hard and its succesive key k_hard+
+            # e.g. when your hard key is #1 at context timestep 0,
+            #      your hard key is from {#1, #2} at context timestep 1,
+            for t in range(0, T-1, 1):
+                d_t = d[:, (t + 1), :]
+                ind_here = encoding_indices[:, t:(t + 1)]
+                d_here = torch.gather(input=d_t, dim=1, index=ind_here)
+                ind_next = torch.clip(ind_here + 1, min=0, max=(self.n_e - 1))
+                d_next = torch.gather(input=d_t, dim=1, index=ind_next)
+                d_choice_mask = torch.less_equal(d_here, d_next)
+                ind_new = torch.where(d_choice_mask, ind_here, ind_next)
+                encoding_indices = torch.cat([encoding_indices, ind_new], dim=1)
 
-        # indices selection
-        z_first_flattened = self.embedding(p_ind_first_flattened)
-        z_second_flattened = self.embedding(p_ind_second_flattened)
-        z_first = z_first_flattened.view(B, T, self.e_dim)
-        z_second = z_second_flattened.view(B, T, self.e_dim)
+        encoding_indices_flattened = encoding_indices.view(-1)
+        key_hard_here = self.embedding(encoding_indices_flattened).view(key_soft.shape)
+        key_hard_next = self.embedding(torch.clip(encoding_indices_flattened + 1,
+                                                  min=0, max=self.n_e-1)).view(key_soft.shape)
+        key_min = self.embedding(min_indices).view(key_soft.shape)
 
-        # weighting output
-        z_out = p_first[..., None] * z_first + (1.0 - p_first[..., None]) * z_second
+        # cluster choice
+        loss_here_base = \
+            torch.sum((key_soft.detach() - key_hard_here) ** 2, dim=-1) \
+            + torch.sum((key_soft - key_hard_here.detach()) ** 2, dim=-1) * self.legacy_cluster
+        loss_next_base = \
+            torch.sum((key_soft.detach() - key_hard_next) ** 2, dim=-1) \
+            + torch.sum((key_soft - key_hard_next.detach()) ** 2, dim=-1) * self.legacy_cluster
+        loss_next_reg = torch.exp(-loss_here_base)
+        loss_here_reg = torch.exp(-loss_next_base)
 
-        if self.log_choice is True:
-            v = torch.var(z_first.to(dtype=torch.float32))
-            return z_out, v
-        else:
-            return z_out, None
+        # energy
+        q_soft = self.key_to_qe(key_soft)
+        q_hard_here = self.key_to_qe(key_hard_here)
+        q_hard_next = self.key_to_qe(key_hard_next)
+
+        energy = \
+            (torch.sum((q_soft.detach() - q_hard_next) ** 2, dim=-1)
+             - torch.sum((q_soft.detach() - q_hard_here) ** 2, dim=-1)) \
+            + (torch.sum((q_soft - q_hard_next.detach()) ** 2, dim=-1)
+               - torch.sum((q_soft - q_hard_here.detach()) ** 2, dim=-1)) * self.legacy_cluster
+
+        # descend energy regularization
+        encoding_indices_change = (encoding_indices[:, 1:] - encoding_indices[:, :-1]).to(dtype=torch.bool)
+        energy_change = energy[:, 1:] - energy[:, :-1]
+        same_hard_mask = torch.where(encoding_indices_change, 0.0, 1.0)
+        energy_change = energy_change * same_hard_mask
+        loss_energy_descent = \
+            torch.maximum(energy_change + 1e-6 / self.n_e, torch.zeros_like(energy_change)).mean()
+
+        # mean energy value, it will make the gradient include in information from pass and future states, actions
+        # but it may not be a bad idea :)
+        energy = energy.mean()
+
+        loss_min_indices = \
+            torch.sum((key_soft.detach() - key_min) ** 2, dim=-1) \
+            + torch.sum((key_soft - key_min.detach()) ** 2, dim=-1) * self.legacy_cluster
+        loss_min_here = torch.where(torch.less(loss_min_indices, loss_here_base), loss_min_indices, 0.0)
+        loss_min_next = torch.where(torch.less(loss_min_indices, loss_next_base), loss_min_indices, 0.0)
+        loss_here = loss_here_base + loss_here_reg - loss_min_here
+        loss_next = loss_next_base + loss_next_reg - loss_min_next
+
+        # preserve gradients
+        if preserve_grad:
+            key_hard = key_soft + (key_hard_here - key_soft).detach()
+        key_hard = key_hard.contiguous()
+
+        min_indices, _ = torch.min(encoding_indices, dim=1)
+        max_indices, _ = torch.max(encoding_indices, dim=1)
+        v = torch.max(max_indices - min_indices)
+
+        return \
+            key_hard, encoding_indices, v, \
+            loss_here, loss_next, energy, loss_energy_descent
 
 
 class VQNeighbor(nn.Module):
-    def __init__(self, n_e, e_dim, beta, use_contrast=False, legacy=False, log_choice=True):
+    def __init__(self, n_e, e_dim,
+                 legacy_cluster=0.2,
+                 legacy_energy=0.2, coe_structure=0.1):
         super().__init__()
         self.n_e = n_e
         self.e_dim = e_dim
 
-        self.beta = beta
-
-        self.use_contrast = use_contrast
-        self.legacy = legacy
-        self.log_choice = log_choice
+        self.legacy_cluster = legacy_cluster
+        self.legacy_energy = legacy_energy
+        self.coe_structure = coe_structure
 
         self.embedding = nn.Embedding(1 + n_e, e_dim)
         self.embedding.weight.data.uniform_(-1.0 / n_e, 1.0 / n_e)
 
         self.register_buffer('arranged_mask', torch.arange(n_e + 1)[:, None])
 
-    def get_loss_dispersion(self):
+    def select_from_index(self, indices):
+        # indices (B, T)
+        B, T = indices.shape
+        indices = indices.contiguous()
+        indices_flattened = indices.view(-1)  # (bs * T)
+        key_hard = self.embedding(indices_flattened).view(B, T, self.e_dim)
+        return key_hard
+
+    def get_loss_structure(self):
+        # print('in get_loss_structure')
         d = torch.sum(self.embedding.weight ** 2, dim=1, keepdim=True) + \
             torch.sum(self.embedding.weight ** 2, dim=1) - 2 * \
             torch.einsum('bd,dn->bn', self.embedding.weight, rearrange(self.embedding.weight, 'n d -> d n'))
-        d_logit = torch.exp(torch.subtract(input=torch.zeros_like(d), other=d))
-        torch.nan_to_num_(d_logit)
-        d_logit = torch.where(torch.isinf(d_logit), torch.zeros_like(d_logit), d_logit)
+        # print('d.requires_grad:', d.requires_grad, 'd.shape:', d.shape)
 
-        print('in get_loss_dispersion d_logit.shape =', d_logit.shape)
-        loss_dispersion = d_logit.sum() / (self.n_e * (self.n_e - 1))
-        return loss_dispersion + \
-               torch.maximum(
-                   torch.abs(self.embedding.weight) - 1.0 / self.key_book.n_e,
-                   torch.zeros_like(self.embedding.weight)
-               )
+        # distance should be larger...
+        # d_logit = torch.exp(torch.subtract(input=torch.zeros_like(d), other=d))
+        # d_logit = torch.where(torch.isinf(d_logit), torch.zeros_like(d_logit), d_logit)
+        # loss_dispersion = d_logit.sum() / (self.n_e * (self.n_e - 1))
 
-    def get_loss_contrast(self, z, ind, book):
-        z_q = book[ind]
-        loss_indices = torch.sum((z - z_q) ** 2, dim=-1)
-        loss_all = torch.sum((z.unsqueeze(2) - book.view(1, 1, -1, self.e_dim)) ** 2, dim=-1)
-        loss_contrast = loss_indices.unsqueeze(-1) - loss_all + (1E-6 / self.n_e)
-        loss_contrast = torch.maximum(loss_contrast, torch.zeros_like(loss_contrast))
-        return loss_contrast.mean()
+        # should be in the range
+        loss_range = \
+            torch.maximum(torch.abs(self.embedding.weight) - 1.0 / self.n_e,
+                          torch.zeros_like(self.embedding.weight)).mean()
+        return loss_range
 
-    def get_key_energy(self, key_soft, indices):
+    def get_energy(self, key_soft, indices):
         # key_soft (B, T, self.e_dim)
         # indices (B, T)
-        key_here = self.select_from_index(indices)
-        key_next = self.select_from_index(indices + 1)
-        key_energy_mat = \
-            torch.sum((key_soft - key_here), dim=-1) ** 2 \
-            - torch.sum((key_soft - key_next), dim=-1) ** 2
-        print('key_energy_mat.shape', key_energy_mat.shape)
-        key_energy = key_energy_mat.sum()  # mean?
-        return key_energy
+        key_soft = key_soft.contiguous()
 
-    def forward(self, z, flatten_out=False, zero_ts_mask=None):
-        # z shape (bs, T, e_dim)
-        z = z.contiguous()
-        B, T = z.shape[0], z.shape[1]
-        z_flattened = z.view(-1, self.e_dim)  # (bs * T, e_dim)
+        key_hard_here = self.select_from_index(indices)
+        key_hard_next = self.select_from_index(indices + 1)
+
+        key_energy_mat = \
+            (torch.sum((key_soft - key_hard_next.detach()) ** 2, dim=-1)
+             - torch.sum((key_soft - key_hard_here.detach()) ** 2, dim=-1)) * self.legacy_energy + \
+            (torch.sum((key_soft.detach() - key_hard_next) ** 2, dim=-1)
+             - torch.sum((key_soft.detach() - key_hard_here) ** 2, dim=-1))
+        # print('in get_energy, key_energy_mat.shape', key_energy_mat.shape)
+
+        # descend energy regularization
+        indices_change = (indices[:, 1:] - indices[:, :-1]).to(dtype=torch.bool)
+        key_energy_change = key_energy_mat[:, 1:] - key_energy_mat[:, :-1]
+        same_hard_mask = torch.where(indices_change, 0.0, 1.0)
+        key_energy_change = key_energy_change * same_hard_mask
+        loss_key_energy_descent = \
+            torch.maximum(key_energy_change + 1e-6 / self.n_e, torch.zeros_like(key_energy_change)).mean()
+
+        return key_energy_mat, loss_key_energy_descent
+
+    def get_key_soft_indices(self, key_soft, zero_ts_mask=None):
+        # key_soft: (B, T, self.e_dim)
+        key_soft = key_soft.contiguous()
+        B, T = key_soft.shape[0], key_soft.shape[1]
+        key_soft_flattened = key_soft.view(-1, self.e_dim)  # (bs * T, e_dim)
+
+        # choosing indices does not need gradient
+        with torch.no_grad():
+            d = torch.sum(key_soft_flattened ** 2, dim=1, keepdim=True) + \
+                torch.sum(self.embedding.weight ** 2, dim=1) - 2 * \
+                torch.einsum('bd,dn->bn', key_soft_flattened, rearrange(self.embedding.weight, 'n d -> d n'))
+            d = d.view(B, T, -1)  # reshape the distance back to (B, T, n_e)
+
+            # First timestep (0 step) in every context will use the nearest key
+            encoding_indices = torch.clip(
+                torch.argmin(d[:, 0, :], dim=1),
+                min=0,
+                max=(self.n_e - 1)
+            )
+            if zero_ts_mask is not None:
+                encoding_indices = torch.where(zero_ts_mask, 0, encoding_indices)
+            encoding_indices = encoding_indices.unsqueeze(1)
+
+            # for the rest timestep, they will only select between form k_hard and its succesive key k_hard+
+            # e.g. when your hard key is #1 at context timestep 0,
+            #      your hard key is from {#1, #2} at context timestep 1,
+            for t in range(0, T - 1, 1):
+                d_t = d[:, (t + 1), :]
+
+                ind_here = encoding_indices[:, t:(t + 1)]
+                d_here = torch.gather(input=d_t, dim=1, index=ind_here)
+                ind_next = torch.clip(ind_here + 1, min=0, max=(self.n_e - 1))
+                d_next = torch.gather(input=d_t, dim=1, index=ind_next)
+
+                d_choice_mask = torch.less_equal(d_here, d_next)
+                ind_new = torch.where(d_choice_mask, ind_here, ind_next)
+                encoding_indices = torch.cat([encoding_indices, ind_new], dim=1)
+
+        key_hard = self.embedding(encoding_indices.view(-1)).view(key_soft.shape)
+        key_hard = key_soft + (key_hard - key_soft).detach()
+        key_hard.contiguous()
+
+        min_indices, _ = torch.min(encoding_indices, dim=1)
+        max_indices, _ = torch.max(encoding_indices, dim=1)
+        v = torch.max(max_indices - min_indices)
+        return encoding_indices, key_hard, v
+
+    def forward(self, key_soft, zero_ts_mask=None):
+        # key_soft shape (bs, T, self.e_dim)
+        key_soft = key_soft.contiguous()
+        B, T = key_soft.shape[0], key_soft.shape[1]
+        key_soft_flattened = key_soft.view(-1, self.e_dim)  # (bs * T, e_dim)
 
         # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
-        d = torch.sum(z_flattened ** 2, dim=1, keepdim=True) + \
-            torch.sum(self.embedding.weight ** 2, dim=1) - 2 * \
-            torch.einsum('bd,dn->bn', z_flattened, rearrange(self.embedding.weight, 'n d -> d n'))
+        d = torch.sum(key_soft_flattened ** 2, dim=1, keepdim=True) \
+            + torch.sum(self.embedding.weight ** 2, dim=1) \
+            - 2 * torch.einsum('bd,dn->bn', key_soft_flattened, rearrange(self.embedding.weight, 'n d -> d n'))
 
-        d = d.view(B, T, -1)  # reshape the distance back to (B, T, n_e)
+        with torch.no_grad():
+            min_indices = torch.argmin(d, dim=1)
 
-        # First timestep (0 step) in every context will use the nearest key
-        encoding_indices = torch.clip(
-            torch.argmin(d[:, 0, :], dim=1).unsqueeze(1),
-            min=0,
-            max=(self.n_e - 1)
-        )
-        if zero_ts_mask is not None:
-            encoding_indices = torch.where(zero_ts_mask, 0, encoding_indices)
+            d = d.view(B, T, self.n_e + 1)
+            # First timestep (0 step) in every context will use the nearest key
+            encoding_indices = torch.clip(
+                torch.argmin(d[:, 0, :], dim=1),
+                min=0,
+                max=(self.n_e - 1)
+            )
+            if zero_ts_mask is not None:
+                encoding_indices = torch.where(zero_ts_mask, 0, encoding_indices)
+            encoding_indices = encoding_indices.unsqueeze(1)
 
-        encoding_indices = encoding_indices.unsqueeze(1)
+            # for the rest timestep, they will only select between form k_hard and its succesive key k_hard+
+            # e.g. when your hard key is #1 at context timestep 0,
+            #      your hard key is from {#1, #2} at context timestep 1,
+            for t in range(0, T-1, 1):
+                d_t = d[:, (t + 1), :]
+                ind_here = encoding_indices[:, t:(t + 1)]
+                d_here = torch.gather(input=d_t, dim=1, index=ind_here)
+                ind_next = torch.clip(ind_here + 1, min=0, max=(self.n_e - 1))
+                d_next = torch.gather(input=d_t, dim=1, index=ind_next)
+                d_choice_mask = torch.less_equal(d_here, d_next)
+                ind_new = torch.where(d_choice_mask, ind_here, ind_next)
+                encoding_indices = torch.cat([encoding_indices, ind_new], dim=1)
 
-        # for the rest timestep, they will only select between form k_hard and its succesive key k_hard+
-        # e.g. when your hard key is #1 at context timestep 0,
-        #      your hard key is from {#1, #2} at context timestep 1,
-        for t in range(0, T-1, 1):
-            d_t = d[:, (t + 1), :]
+        encoding_indices_flattened = encoding_indices.view(-1)
+        key_hard_here = self.embedding(encoding_indices_flattened).view(key_soft.shape)
+        key_hard_next = self.embedding(encoding_indices_flattened + 1).view(key_soft.shape)
+        key_min = self.embedding(min_indices).view(key_soft.shape)
 
-            ind_here = encoding_indices[:, t:(t + 1)]
-            d_here = torch.gather(input=d_t, dim=1, index=ind_here)
-            ind_next = torch.clip(ind_here + 1, min=0, max=(self.n_e - 1))
-            d_next = torch.gather(input=d_t, dim=1, index=ind_next)
-            d_choice_mask = torch.less_equal(d_here, d_next)
-            ind_new = torch.where(d_choice_mask, ind_here, ind_next)
-            encoding_indices = torch.cat([encoding_indices, ind_new], dim=1)
+        # Calculate energy at every point
+        key_em_here = \
+            torch.sum((key_soft.detach() - key_hard_here) ** 2, dim=-1) \
+            + torch.sum((key_soft - key_hard_here.detach()) ** 2, dim=-1) * self.legacy_energy
+        key_em_next = \
+            torch.sum((key_soft.detach() - key_hard_next) ** 2, dim=-1) \
+            + torch.sum((key_soft - key_hard_next.detach()) ** 2, dim=-1) * self.legacy_energy
 
-        z_q = self.embedding(encoding_indices.view(-1)).view(z.shape)
+        key_energy_mat = key_em_next - key_em_here
 
-        # loss for embedding
-        if not self.legacy:
-            if self.use_contrast is False:
-                loss = \
-                    self.beta * torch.mean((z_q.detach() - z) ** 2) + \
-                    torch.mean((z_q - z.detach()) ** 2) + \
-                    self.get_loss_dispersion()
-            else:
-                loss = \
-                    self.beta * self.get_loss_contrast(z, encoding_indices, self.embedding.weight.data.detach()) + \
-                    self.get_loss_contrast(z.detach(), encoding_indices, self.embedding.weight.data) + \
-                    self.get_loss_dispersion()
+        # descend energy regularization
+        encoding_indices_change = (encoding_indices[:, 1:] - encoding_indices[:, :-1]).to(dtype=torch.bool)
+        key_energy_change = key_energy_mat[:, 1:] - key_energy_mat[:, :-1]
+        same_hard_mask = torch.where(encoding_indices_change, 0.0, 1.0)
+        key_energy_change = key_energy_change * same_hard_mask
+        loss_key_energy_descent = \
+            torch.maximum(key_energy_change + 1e-6 / self.n_e, torch.zeros_like(key_energy_change)).mean()
 
-        else:
-            if self.use_contrast is False:
-                loss = \
-                    torch.mean((z_q.detach() - z) ** 2) + \
-                    self.beta * torch.mean((z_q - z.detach()) ** 2) + \
-                    self.get_loss_dispersion()
-            else:
-                loss = \
-                    self.get_loss_contrast(z, encoding_indices, self.embedding.weight.data.detach()) + \
-                    self.beta * self.get_loss_contrast(z.detach(), encoding_indices, self.embedding.weight.data) + \
-                    self.get_loss_dispersion()
+        # Clustering (Normal)
+        loss_min_indices = \
+            torch.sum((key_soft.detach() - key_min) ** 2, dim=-1) \
+            + torch.sum((key_soft - key_min.detach()) ** 2, dim=-1) * self.legacy_cluster
+        reg_persist_mat = torch.exp(-key_em_next)
+        e_normal_mat = \
+            torch.where(torch.greater(key_em_here, loss_min_indices - 1e-6 / self.n_e),
+                        key_em_here - loss_min_indices + 1e-6 / self.n_e,
+                        key_em_here) \
+            + reg_persist_mat
+
+        # Escape (Abnormal)
+        reg_escape_mat = torch.exp(-key_em_here)
+        e_abnormal_mat = key_em_next + reg_escape_mat
 
         # preserve gradients
-        z_q = z + (z_q - z).detach()
-        z_q = z_q.contiguous()
+        key_hard = key_soft + (key_hard_here - key_soft).detach()
+        key_hard = key_hard.contiguous()
 
-        if flatten_out is False:
-            encoding_indices = encoding_indices.reshape(z_q.shape[0], z_q.shape[1])  # (B, T)
+        min_indices, _ = torch.min(encoding_indices, dim=1)
+        max_indices, _ = torch.max(encoding_indices, dim=1)
+        v = torch.max(max_indices - min_indices)
 
-        if self.log_choice is True:
-            min_indices, _ = torch.min(encoding_indices, dim=1)
-            max_indices, _ = torch.max(encoding_indices, dim=1)
-            v = torch.max(max_indices - min_indices)
-            return z_q, loss, encoding_indices, v
-        else:
-            return z_q, loss, encoding_indices, None
+        return \
+            key_hard, encoding_indices, v, \
+            loss_key_energy_descent, \
+            key_energy_mat, e_normal_mat, e_abnormal_mat
 
-    def select_from_index(self, indices, flatten_in=False):
-        indices = indices.contiguous()
-        if flatten_in is False:
-            indices_flattened = indices.view(-1)  # (bs * T)
-        else:
-            indices_flattened = indices
-        z_out = self.embedding(indices_flattened)
-        if flatten_in is False:
-            z_out = z_out.view(indices.shape[0], indices.shape[1], self.e_dim)
+    def label_mean(self, loss_criteria, indices):
+        # loss_criteria: (B, T) size tensor of loss
+        # indices: (B, T) size tensor of selected indices
+        with torch.no_grad():
+            loss_criteria_flattened = loss_criteria.view(-1)[:, None]
+            expanded_indices = (indices.view(-1))[None].expand(self.n_e + 1, -1)
+            mask = torch.eq(expanded_indices, self.arranged_mask).to(loss_criteria.dtype)
 
-        return z_out
+            label_cnt = mask.sum(-1, keepdim=True)  # number of data in every label
+            label_sum = mask @ loss_criteria_flattened  # sum in every label
+            label_mean = torch.div(label_sum, label_cnt).view(-1)  # mean in every label
+            torch.nan_to_num_(label_mean)
+            loss_mean_mat = label_mean[indices]
+
+        return label_mean, loss_mean_mat
 
 
 class VQElastic(nn.Module):

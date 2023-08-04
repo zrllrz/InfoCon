@@ -10,8 +10,9 @@ import mani_skill2.envs
 import torch
 
 from autocot import (
-    # RecNetConfig,
+    RecNetConfig,
     KeyNetConfig,
+    ENetConfig,
     ActCommitNetConfig,
     AutoCoT
 )
@@ -91,6 +92,8 @@ if __name__ == "__main__":
     state_dim = state_dict_from_ckpt['key_net.state_encoder.net.0.weight'].shape[1]
     action_dim = state_dict_from_ckpt['key_net.action_encoder.net.0.weight'].shape[1]
     key_dim = state_dict_from_ckpt['act_net.key_encoder.net.0.weight'].shape[1]
+    if params['use_key_energy'] is True:
+        key_dim -= state_dim
     max_timestep = state_dict_from_ckpt['key_net.global_pos_emb'].shape[1]
     print('Loaded ckpt from:', path)
     # Load demos to fetch the env. seeds used in training.
@@ -277,32 +280,26 @@ if __name__ == "__main__":
         commit=False,
         use_key_energy=params['use_key_energy']
     )
-    # commit_config = ActCommitNetConfig(
-    #     n_embd=params['n_embd'],
-    #     n_head=params['n_head'],
-    #     attn_pdrop=float(params['dropout']),
-    #     resid_pdrop=float(params['dropout']),
-    #     embd_pdrop=float(params['dropout']),
-    #     block_size=params['context_length'],
-    #     n_layer=params['n_commit_layer'],
-    #     max_timestep=max_timestep,
-    #     commit=True
-    # )
+    e_config = ENetConfig(
+        n_embd=params['n_embd'],
+        n_head=params['n_head'],
+        attn_pdrop=float(params['dropout']),
+        resid_pdrop=float(params['dropout']),
+        embd_pdrop=float(params['dropout']),
+        block_size=params['context_length'],
+        n_layer=params['n_eact_layer'],
+        max_timestep=max_timestep,
+    )
 
     print(params['vq_n_e'])
     autocot_model = AutoCoT(
         key_config=key_config,
-        vq_n_e=params['vq_n_e'],
-        vq_beta=float(params['vq_beta']),
-        vq_legacy=params['vq_legacy'],
-        vq_use_contrast=params['vq_use_contrast'],
-        vq_log=params['vq_log'],
-        vq_kmeans_reset=params['vq_kmeans_reset'],
-        vq_kmeans_step=params['vq_kmeans_step'],
         act_config=act_config,
+        e_config=e_config,
+        vq_n_e=params['vq_n_e'],
+        vq_legacy_cluster=float(params['vq_legacy_cluster']),
         optimizers_config=None,
         scheduler_config=None,
-        subgoal_marginal=float(params['subgoal_marginal']),
         state_dim=state_dim,
         action_dim=action_dim,
         key_dim=key_dim
