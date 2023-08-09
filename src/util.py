@@ -10,7 +10,7 @@ def anomaly_score(r, sharpen=100.0):
 
 def cos_anomaly_score(vcos, sharpen=10.0):
     f = vcos * sharpen
-    f = (torch.abs(torch.tanh(f)) + torch.tanh(f)) * 0.5
+    f = (torch.abs(torch.tanh(f)) - torch.tanh(f)) * 0.5
     return f
 
 

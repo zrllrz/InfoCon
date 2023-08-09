@@ -12,6 +12,9 @@ import torch
 from autocot import (
     RecNetConfig,
     KeyNetConfig,
+    ImplicitSAGPTConfig,
+    ImplicitSAResFCConfig,
+    ExplicitSAHNConfig,
     ENetConfig,
     ActCommitNetConfig,
     AutoCoT
@@ -24,7 +27,6 @@ from path import MODEL_PATH, DATA_PATH
 
 @torch.no_grad()
 def predict(model, action_hist, state_hist, t):
-
     timesteps = torch.from_numpy(t)[:, None].to(model.device)
 
     if not action_hist:  # The first step.
@@ -91,9 +93,11 @@ if __name__ == "__main__":
 
     state_dim = state_dict_from_ckpt['key_net.state_encoder.net.0.weight'].shape[1]
     action_dim = state_dict_from_ckpt['key_net.action_encoder.net.0.weight'].shape[1]
-    key_dim = state_dict_from_ckpt['act_net.key_encoder.net.0.weight'].shape[1]
-    if params['use_key_energy'] is True:
-        key_dim -= state_dim
+    key_dim = params['dim_key']
+    e_dim = params['dim_e']
+
+    # if params['use_key_energy'] is True:
+    #     key_dim -= state_dim
     max_timestep = state_dict_from_ckpt['key_net.global_pos_emb'].shape[1]
     print('Loaded ckpt from:', path)
     # Load demos to fetch the env. seeds used in training.
@@ -268,41 +272,76 @@ if __name__ == "__main__":
         n_layer=params['n_key_layer'],
         max_timestep=max_timestep
     )
-    act_config = ActCommitNetConfig(
-        n_embd=params['n_embd'],
-        n_head=params['n_head'],
-        attn_pdrop=float(params['dropout']),
-        resid_pdrop=float(params['dropout']),
-        embd_pdrop=float(params['dropout']),
-        block_size=params['context_length'],
-        n_layer=params['n_act_layer'],
-        max_timestep=max_timestep,
-        commit=False,
-        use_key_energy=params['use_key_energy']
-    )
-    e_config = ENetConfig(
-        n_embd=params['n_embd'],
-        n_head=params['n_head'],
-        attn_pdrop=float(params['dropout']),
-        resid_pdrop=float(params['dropout']),
-        embd_pdrop=float(params['dropout']),
-        block_size=params['context_length'],
-        n_layer=params['n_eact_layer'],
-        max_timestep=max_timestep,
-    )
+
+    if params['sa_type'] == 'resfc':
+        sa_config = ImplicitSAResFCConfig(
+            n_embd=params['n_embd'],
+            block_size=params['context_length'],
+            n_state_layer=params['n_state_layer'],
+            n_action_layer=params['n_action_layer'],
+            max_timestep=max_timestep,
+            use_pos_emb=params['use_pos_emb']
+        )
+    elif params['sa_type'] == 'gpt':
+        sa_config = ImplicitSAGPTConfig(
+            n_embd=params['n_embd'],
+            n_head=params['n_head'],
+            attn_pdrop=float(params['dropout']),
+            resid_pdrop=float(params['dropout']),
+            embd_pdrop=float(params['dropout']),
+            block_size=params['context_length'],
+            n_layer=params['n_state_layer']+params['n_action_layer'],
+            state_layer=params['n_state_layer']-1,
+            max_timestep=max_timestep
+        )
+    elif params['sa_type'] == 'hn':
+        sa_config = ExplicitSAHNConfig(
+            dim_h=params['n_embd'] * params['n_state_layer'],
+            block_size=params['context_length'],
+            use_pos_emb=params['use_pos_emb'],
+            reward_layer=params['n_state_layer'],
+            max_timestep=max_timestep
+        )
+    else:
+        # should not reach here
+        print('Unknown sa_type')
+        assert False
+
+    # act_config = ActCommitNetConfig(
+    #     n_embd=params['n_embd'],
+    #     n_head=params['n_head'],
+    #     attn_pdrop=float(params['dropout']),
+    #     resid_pdrop=float(params['dropout']),
+    #     embd_pdrop=float(params['dropout']),
+    #     block_size=params['context_length'],
+    #     n_layer=params['n_act_layer'],
+    #     max_timestep=max_timestep,
+    #     commit=False,
+    #     use_key_energy=params['use_key_energy']
+    # )
+    # e_config = ENetConfig(
+    #     n_embd=params['n_embd'],
+    #     n_head=params['n_head'],
+    #     attn_pdrop=float(params['dropout']),
+    #     resid_pdrop=float(params['dropout']),
+    #     embd_pdrop=float(params['dropout']),
+    #     block_size=params['context_length'],
+    #     n_layer=params['n_eact_layer'],
+    #     max_timestep=max_timestep,
+    # )
 
     print(params['vq_n_e'])
     autocot_model = AutoCoT(
         key_config=key_config,
-        act_config=act_config,
-        e_config=e_config,
+        sa_config=sa_config,
         vq_n_e=params['vq_n_e'],
-        vq_legacy_cluster=float(params['vq_legacy_cluster']),
+        KT=float(params['KT']),
         optimizers_config=None,
         scheduler_config=None,
         state_dim=state_dim,
         action_dim=action_dim,
-        key_dim=key_dim
+        key_dim=key_dim,
+        e_dim=e_dim
     )
 
     autocot_model = autocot_model.cuda()

@@ -14,6 +14,635 @@ from einops import rearrange
 from module_util import MLP
 
 
+class VQClassifierNN(nn.Module):
+    def __init__(self, key_dim, n_e, e_dim, KT=1.0):
+        super().__init__()
+        self.key_dim = key_dim
+        self.n_e = n_e
+        self.e_dim = e_dim
+        self.KT = KT
+
+        self.sm = nn.Softmax(dim=-1)
+
+        self.keys = nn.Embedding(n_e, key_dim)
+        self.keys.weight.data.uniform_(-1.0 / n_e, 1.0 / n_e)
+
+        self.vparams = nn.Embedding(n_e, e_dim)
+        self.vparams.weight.data.uniform_(-1.0 / n_e, 1.0 / n_e)
+
+        arange = torch.arange(n_e, dtype=torch.float32)
+        self.register_buffer('arange', arange)
+
+    def score_to_weight(self, score):
+        # score (..., n_e)
+        weight = self.sm(torch.div(score, self.KT))  # (..., n_e)
+        weight = torch.nan_to_num(weight)
+        return weight
+
+    def cos_sim(self, v_soft, mode='key'):
+        if mode == 'key':
+            key_soft = v_soft  # (B, T, key_dim)
+            with torch.no_grad():
+                B = key_soft.shape[0]
+                key_soft_norm = F.normalize(key_soft, dim=-1)
+                keys = self.keys.weight
+                keys_norm = F.normalize(keys, p=2.0, dim=-1)
+                keys_norm = keys_norm.view(1, self.n_e, self.key_dim).repeat(B, 1, 1)
+
+                k_cs_ss = torch.bmm(key_soft_norm, rearrange(key_soft_norm, 'b t c -> b c t'))
+                k_cs_sh = torch.bmm(key_soft_norm, rearrange(keys_norm, 'b t c -> b c t'))
+
+                return k_cs_ss, k_cs_sh
+        elif mode == 'vparams':
+            vparams_soft = v_soft  # (B, T, e_dim)
+            with torch.no_grad():
+                B = vparams_soft.shape[0]
+                vparams_soft_norm = F.normalize(vparams_soft, dim=-1)
+
+                vparams = self.vparams.weight
+                vparams_norm = F.normalize(vparams, p=2.0, dim=-1)
+                vparams_norm = vparams_norm.view(1, self.n_e, self.e_dim).repeat(B, 1, 1)
+
+                vp_cs_ss = torch.bmm(vparams_soft_norm, rearrange(vparams_soft_norm, 'b t c -> b c t'))
+                vp_cs_sh = torch.bmm(vparams_norm, rearrange(vparams_norm, 'b t c -> b c t'))
+
+                return vp_cs_ss, vp_cs_sh
+        else:
+            print('unknown cos_sim type')
+            assert False
+
+    # return: pn_change_ss, pn_change_sh
+    def cs_change(self, cs1, cs2):
+        cs_ss1, cs_sh1 = cs1
+        cs_ss2, cs_sh2 = cs2
+        with torch.no_grad():
+            cs_ss_change = cs_ss2 - cs_ss1
+            cs_sh_change = cs_sh2 - cs_sh1
+
+            pn_change_ss = torch.where(torch.less(cs_ss_change, torch.zeros_like(cs_ss_change)),
+                                       -1.0, 1.0)
+            pn_change_sh = torch.where(torch.less(cs_sh_change, torch.zeros_like(cs_sh_change)),
+                                       -1.0, 1.0)
+
+            return pn_change_ss, pn_change_sh
+
+    def get_key_soft_indices(self, key_soft):
+        # key_soft: (B, T, self.e_dim)
+        # choosing indices does not need gradient
+        with torch.no_grad():
+            key_soft = key_soft.contiguous()
+            B, T = key_soft.shape[0], key_soft.shape[1]
+            key_soft_norm = F.normalize(key_soft, p=2.0, dim=-1)
+            key_soft_flattened = key_soft_norm.view(B*T, self.key_dim)  # (B*T, key_dim)
+
+            keys_norm = F.normalize(self.keys.weight, p=2.0, dim=-1)  # (n_e, key_dim)
+
+            score_ksh_flattened = torch.einsum('bd,dn->bn', key_soft_flattened,
+                                               rearrange(keys_norm, 'n d -> d n'))  # (B*T, n_e)
+
+            # use the nearest key
+            encoding_indices = torch.argmax(score_ksh_flattened, dim=1)  # (B*T)
+            encoding_indices = encoding_indices.view(B, T)
+
+            return encoding_indices
+
+    def policy_forward(self, key_soft):
+        # key_soft shape (B, T, key_dim)
+        key_soft = key_soft.contiguous()
+        B, T = key_soft.shape[0], key_soft.shape[1]
+        key_soft_norm = F.normalize(key_soft, p=2.0, dim=-1)
+        key_soft_flattened = key_soft_norm.view(B*T, self.key_dim)  # (B*T, key_dim)
+        keys_norm = F.normalize(self.keys.weight, p=2.0, dim=-1)  # (n_e, key_dim)
+        score_ksh_flattened = torch.einsum('bd,dn->bn', key_soft_flattened,
+                                           rearrange(keys_norm, 'n d -> d n'))  # (B*T, n_e)
+
+        # to weighted params
+        w_flattened = self.score_to_weight(score_ksh_flattened)  # (B*T, n_e)
+        vparams_norm = F.normalize(self.vparams.weight, p=2.0, dim=-1)  # (n_e, e_dim)
+        vparams_w_flattened = w_flattened.view(B * T, 1, self.n_e) @ vparams_norm.view(1, self.n_e, self.e_dim)
+        vparams_w_flattened = vparams_w_flattened.squeeze(1)  # (B*T, e_dim)
+        vparams_w_flattened = F.normalize(vparams_w_flattened, p=2.0, dim=-1)  # (B*T, e_dim)
+        vparams_w = vparams_w_flattened.view(B, T, self.e_dim)  # (B, T, e_dim)
+        vparams_w = vparams_w.contiguous()  # (B, T, e_dim)
+
+        # Neareset Neighbor for indices and hard vparams
+        encoding_indices = torch.argmax(score_ksh_flattened, dim=1)  # (B*T)
+        encoding_indices = encoding_indices.view(B, T)  # (B, T)
+
+        vparams_hard = self.vparams(encoding_indices).view(B, T, self.e_dim)  # (B, T, e_dim)
+        vparams_hard = F.normalize(vparams_hard, p=2.0, dim=-1)  # normalization (B, T, e_dim)
+        vparams_hard = vparams_hard.contiguous()
+        vparams_hard = vparams_w + (vparams_hard - vparams_w).detach()  # store gradient
+
+        return encoding_indices, vparams_w, vparams_hard
+
+    def clustering_forward(self, key_soft):
+        # key_soft shape (B, T, key_dim)
+        # key_soft shape (B, T, key_dim)
+        key_soft = key_soft.contiguous()
+        B, T = key_soft.shape[0], key_soft.shape[1]
+
+        key_soft_norm = F.normalize(key_soft, p=2.0, dim=-1)  # (B, T, key_dim)
+        key_soft_flattened = key_soft_norm.view(B * T, self.key_dim)  # (B*T, key_dim)
+        keys_norm = F.normalize(self.keys.weight, p=2.0, dim=-1)  # (n_e, key_dim)
+        score_ksh_flattened = torch.einsum('bd,dn->bn', key_soft_flattened,
+                                           rearrange(keys_norm, 'n d -> d n'))  # (B*T, n_e)
+        score_ksh = score_ksh_flattened.view(B, T, self.n_e)  # (B, T, n_e)
+
+        # calc score_kss
+        score_kss = torch.einsum('btc,bcs->bts', key_soft_norm,
+                                 rearrange(key_soft_norm, 'b t c -> b c t'))  # (B, T, T)
+
+        # to weighted params
+        w_flattened = self.score_to_weight(score_ksh_flattened)  # (B*T, n_e)
+        vparams_norm = F.normalize(self.vparams.weight, p=2.0, dim=-1)  # (n_e, e_dim)
+        vparams_w_flattened = w_flattened.view(B*T, 1, self.n_e) @ vparams_norm.view(1, self.n_e, self.e_dim)
+        vparams_w_flattened = vparams_w_flattened.squeeze(1)  # (B*T, e_dim)
+        vparams_w_flattened = F.normalize(vparams_w_flattened, p=2.0, dim=-1)  # (B*T, e_dim)
+        vparams_w = vparams_w_flattened.view(B, T, self.e_dim)  # (B, T, e_dim)
+        vparams_w = vparams_w.contiguous()  # (B, T, e_dim)
+
+        # calc score_vpss (cos sim between vparams_w)
+        score_vpss = torch.einsum('btc,bcs->bts', vparams_w,
+                                  rearrange(vparams_w, 'b t c -> b c t'))  # (B, T, T)
+
+        # calc score_vpsh (cos sim between vparams_w and self.vparams)
+        score_vpsh_flattened = torch.einsum('bd,dn->bn', vparams_w_flattened,
+                                            rearrange(vparams_norm, 'n d -> d n'))  # (B*T, n_e)
+        score_vpsh = score_vpsh_flattened.view(B, T, self.n_e)  # (B, T, n_e)
+
+
+        # Neareset Neighbor for indices and hard vparams
+        encoding_indices = torch.argmax(score_ksh_flattened, dim=1)  # (B*T)
+        encoding_indices = encoding_indices.view(B, T)  # (B, T)
+
+        vparams_hard = self.vparams(encoding_indices).view(B, T, self.e_dim)  # (B, T, e_dim)
+        vparams_hard = F.normalize(vparams_hard, p=2.0, dim=-1)  # normalization (B, T, e_dim)
+        vparams_hard = vparams_hard.contiguous()
+        vparams_hard = vparams_w + (vparams_hard - vparams_w).detach()  # store gradient
+
+        return \
+            encoding_indices, vparams_w, vparams_hard, \
+            score_vpss, score_vpsh, score_kss, score_ksh
+
+    def forward(self, key_soft):
+        # key_soft shape (B, T, self.key_dim)
+        key_soft = key_soft.contiguous()
+        B, T = key_soft.shape[0], key_soft.shape[1]
+
+        key_soft_norm = F.normalize(key_soft, p=2.0, dim=-1)  # (B, T, key_dim)
+        key_soft_flattened = key_soft_norm.view(B * T, self.key_dim)  # (B*T, key_dim)
+        keys_norm = F.normalize(self.keys.weight, p=2.0, dim=-1)  # (n_e, key_dim)
+
+        # calc score_ksh
+        score_ksh_flattened = torch.einsum('bd,dn->bn', key_soft_flattened,
+                                           rearrange(keys_norm, 'n d -> d n'))  # (B*T, n_e)
+        score_ksh = score_ksh_flattened.view(B, T, self.n_e)  # (B, T, n_e)
+
+        # calc score_kss
+        score_kss = torch.einsum('btc,bcs->bts', key_soft_norm,
+                                 rearrange(key_soft_norm, 'b t c -> b c t'))  # (B, T, T)
+
+        # to weighted params
+        w_flattened = self.score_to_weight(score_ksh_flattened)  # (B*T, n_e)
+        vparams_norm = F.normalize(self.vparams.weight, p=2.0, dim=-1)  # (n_e, e_dim)
+        vparams_w_flattened = w_flattened.view(B * T, 1, self.n_e) @ vparams_norm.view(1, self.n_e, self.e_dim)
+        vparams_w_flattened = vparams_w_flattened.squeeze(1)  # (B*T, e_dim)
+        vparams_w_flattened = F.normalize(vparams_w_flattened, p=2.0, dim=-1)  # (B*T, e_dim)
+        vparams_w = vparams_w_flattened.view(B, T, self.e_dim)  # (B, T, e_dim)
+        vparams_w = vparams_w.contiguous()  # (B, T, e_dim)
+
+        # calc score_vpsh (cos sim between vparams_w and self.vparams)
+        score_vpsh_flattened = torch.einsum('bd,dn->bn', vparams_w_flattened,
+                                            rearrange(vparams_norm, 'n d -> d n'))  # (B*T, n_e)
+        score_vpsh = score_vpsh_flattened.view(B, T, self.n_e)  # (B, T, n_e)
+
+        # calc score_vpss (cos sim between vparams_w)
+        score_vpss = torch.einsum('btc,bcs->bts', vparams_w,
+                                  rearrange(vparams_w, 'b t c -> b c t'))  # (B, T, T)
+
+        # Neareset Neighbor for indices and hard vparams
+        encoding_indices = torch.argmax(score_ksh_flattened, dim=1)  # (B*T)
+        encoding_indices = encoding_indices.view(B, T)  # (B, T)
+
+        vparams_hard = self.vparams(encoding_indices).view(B, T, self.e_dim)  # (B, T, e_dim)
+        vparams_hard = F.normalize(vparams_hard, p=2.0, dim=-1)  # normalization (B, T, e_dim)
+        vparams_hard = vparams_hard.contiguous()
+        vparams_hard = vparams_w + (vparams_hard - vparams_w).detach()  # store gradient
+
+        v_global = torch.max(encoding_indices) - torch.min(encoding_indices)
+
+        return \
+            encoding_indices, v_global, \
+            vparams_w, vparams_hard, \
+            score_vpss, score_vpsh, score_kss, score_ksh
+
+class VQClassifier(nn.Module):
+    def __init__(self, key_dim, n_e, e_dim, KT=1.0):
+        super().__init__()
+        self.key_dim = key_dim
+        self.n_e = n_e
+        self.e_dim = e_dim
+        self.KT = KT
+
+        self.sm = nn.Softmax(dim=-1)
+
+        self.classifier_linear = nn.Embedding(n_e, key_dim)
+        self.classifier_linear.weight.data.uniform_(-1.0 / n_e, 1.0 / n_e)
+
+        self.embedding = nn.Embedding(n_e, e_dim)
+        self.embedding.weight.data.uniform_(-1.0 / n_e, 1.0 / n_e)
+
+        # mask for clustering between key_soft and key_hard
+        # arange = torch.arange(n_e, dtype=torch.float32)
+        # hm_dis = torch.abs(arange.view(-1, 1) - arange)
+        # hm_dis = torch.neg(hm_dis - torch.ones_like(hm_dis))
+        # hm_dis[[i for i in range(n_e)], [i for i in range(n_e)]] = float('-inf')
+        # mask_ksh = torch.pow(2.0, hm_dis)
+        # print('mask_ksh =\n', mask_ksh)
+        # self.register_buffer('mask_ksh', mask_ksh)
+
+        arange = torch.arange(n_e, dtype=torch.float32)
+        hm_dis = torch.abs(arange.view(-1, 1) - arange)
+        mask_khh = torch.where(torch.less_equal(hm_dis, 1), 1.0, 0.0)
+        print('mask_khh =\n', mask_khh)
+        self.register_buffer('mask_khh', mask_khh)
+
+        # other helpful buffer
+        self.register_buffer('arange', arange)
+
+    # positive sample mask for (ks, ks) and (ks, kh)
+    # indices: (B, T)
+    # return, pn_ss (B, T, T), pn_sh (B, T, n_e), weighted (+1 or -1)
+    def get_pn_mask(self, indices):
+        # first get positive_sh
+        B, T = indices.shape
+        arange_sh = torch.less_equal(abs(indices.view(B, T, 1).repeat(1, 1, self.n_e)
+                                         - self.arange.view(1, 1, self.n_e).repeat(B, T, 1)), 1)
+        pn_sh = torch.where(arange_sh, 1.0, -1.0)
+
+        arange_ss = torch.less_equal(abs(indices.view(B, 1, T).repeat(1, T, 1)
+                                         - indices.view(B, T, 1).repeat(1, 1, T)), 1)
+        pn_ss = torch.where(arange_ss, 1.0, -1.0)
+        return pn_sh, pn_ss
+
+    def score_to_weight(self, score):
+        # score (B, T, n_e)
+        weight = self.sm(torch.div(score, self.KT))  # (B, T, n_e)
+        weight = torch.nan_to_num(weight)
+        return weight
+
+    def key_cos_sim(self, key_soft):
+        # key_soft (B, T, C)
+        with torch.no_grad():
+            B = key_soft.shape[0]
+            key_soft_norm = F.normalize(key_soft, dim=-1)
+
+            key_hard = self.classifier_linear.weight
+            key_hard_norm = F.normalize(key_hard, dim=-1)
+            key_hard_norm = key_hard_norm.view(1, self.n_e, self.key_dim).repeat(B, 1, 1)
+
+            k_cs_ss = torch.bmm(key_soft_norm, rearrange(key_soft_norm, 'b t c -> b c t'))
+            k_cs_sh = torch.bmm(key_soft_norm, rearrange(key_hard_norm, 'b t c -> b c t'))
+
+            return k_cs_ss, k_cs_sh
+
+    # return: pn_change_ss, pn_change_sh
+    def key_cs_change(self, k_cs1, k_cs2):
+        k_cs_ss1, k_cs_sh1 = k_cs1
+        k_cs_ss2, k_cs_sh2 = k_cs2
+        with torch.no_grad():
+            k_cs_ss_change = k_cs_ss2 - k_cs_ss1
+            k_cs_sh_change = k_cs_sh2 - k_cs_sh1
+
+            pn_change_ss = torch.where(torch.less(k_cs_ss_change, torch.zeros_like(k_cs_ss_change)),
+                                       -1.0, 1.0)
+            pn_change_sh = torch.where(torch.less(k_cs_sh_change, torch.zeros_like(k_cs_sh_change)),
+                                       -1.0, 1.0)
+            return pn_change_ss, pn_change_sh
+
+    # def weight_to_loss(self, weight, indices):
+    #     # weight (B, T, n_e)
+    #     # indices (B, T)
+    #     weight_i = torch.gather(
+    #         input=weight,
+    #         index=indices.unsqueeze(-1), dim=-1
+    #     ).squeeze(-1)  # (B * T)
+    #     log_weight_i = torch.log(weight_i)  # (B * T)
+    #     log_weight_i = torch.nan_to_num(log_weight_i)  # (B * T)
+    #     return torch.neg(log_weight_i)
+
+    def get_key_soft_indices(self, key_soft, zero_ts_mask=None):
+        # key_soft: (B, T, self.e_dim)
+        # choosing indices does not need gradient
+        with torch.no_grad():
+            key_soft = key_soft.contiguous()
+            B, T = key_soft.shape[0], key_soft.shape[1]
+            key_soft_norm = F.normalize(key_soft, p=2.0, dim=-1)
+            key_soft_flattened = key_soft_norm.view(B * T, self.key_dim)
+
+            classifier_linear_norm = F.normalize(self.classifier_linear.weight, p=2.0, dim=-1)
+
+            score_ksh = torch.einsum('bd,dn->bn', key_soft_flattened,
+                                     rearrange(classifier_linear_norm, 'n d -> d n'))
+            score_ksh = score_ksh.view(B, T, self.n_e)  # (B, T, n_e)
+
+            # First timestep (0 step) in every context will use the nearest key
+            encoding_indices = torch.clip(
+                torch.argmax(score_ksh[:, 0, :], dim=1),
+                min=0,
+                max=(self.n_e-1)
+            )
+            if zero_ts_mask is not None:
+                encoding_indices = torch.where(zero_ts_mask, 0, encoding_indices)
+            encoding_indices = encoding_indices.unsqueeze(1)
+
+            # for the rest timestep, they will only select between form k_hard and its succesive key k_hard+
+            # e.g. when your hard key is #1 at context timestep 0,
+            #      your hard key is from {#1, #2} at context timestep 1,
+            for t in range(0, T - 1, 1):
+                score_t = score_ksh[:, (t + 1), :]
+
+                ind_here = encoding_indices[:, t:(t + 1)]
+                d_here = torch.gather(input=score_t, dim=1, index=ind_here)
+                ind_next = torch.clip(ind_here + 1, min=0, max=(self.n_e - 1))
+                d_next = torch.gather(input=score_t, dim=1, index=ind_next)
+
+                d_choice_mask = torch.greater_equal(d_here, d_next)
+                ind_new = torch.where(d_choice_mask, ind_here, ind_next)
+                encoding_indices = torch.cat([encoding_indices, ind_new], dim=1)
+
+            return encoding_indices
+
+    def policy_forward(self, key_soft, zero_ts_mask=None):
+        # key_soft shape (B, T, self.key_dim)
+        # zero_ts_mask (B)
+        key_soft = key_soft.contiguous()
+        B, T = key_soft.shape[0], key_soft.shape[1]
+        key_soft_norm = F.normalize(key_soft, p=2.0, dim=-1)
+        key_soft_flattened = key_soft_norm.view(B * T, self.key_dim)
+        classifier_linear_norm = F.normalize(self.classifier_linear.weight, p=2.0, dim=-1)
+        score_ksh = torch.einsum('bd,dn->bn', key_soft_flattened,
+                                 rearrange(classifier_linear_norm, 'n d -> d n'))
+        score_ksh = score_ksh.view(B, T, self.n_e)
+
+        # to key hard (weighed book)
+        weight = self.score_to_weight(score_ksh)  # (B, T, n_e)
+        key_hard = weight.view(B, T, 1, self.n_e) @ self.embedding.weight.view(1, 1, self.n_e, self.e_dim)
+        key_hard = key_hard.squeeze(2)
+
+        key_hard = key_hard.contiguous()
+
+        with torch.no_grad():
+            # First timestep (0 step) in every context will use the nearest key
+            encoding_indices = torch.clip(
+                torch.argmax(score_ksh[:, 0, :], dim=1),
+                min=0,
+                max=(self.n_e-1)
+            )
+            if zero_ts_mask is not None:
+                encoding_indices = torch.where(zero_ts_mask, 0, encoding_indices)
+            encoding_indices = encoding_indices.unsqueeze(1)
+
+            # for the rest timestep, they will only select between form k_hard and its succesive key k_hard+
+            # e.g. when your hard key is #1 at context timestep 0,
+            #      your hard key is from {#1, #2} at context timestep 1,
+            for t in range(0, T - 1, 1):
+                score_t = score_ksh[:, (t + 1), :]
+
+                ind_here = encoding_indices[:, t:(t + 1)]
+                d_here = torch.gather(input=score_t, dim=1, index=ind_here)
+                ind_next = torch.clip(ind_here + 1, min=0, max=(self.n_e - 1))
+                d_next = torch.gather(input=score_t, dim=1, index=ind_next)
+
+                d_choice_mask = torch.greater_equal(d_here, d_next)
+                ind_new = torch.where(d_choice_mask, ind_here, ind_next)
+                encoding_indices = torch.cat([encoding_indices, ind_new], dim=1)
+
+        key_hard_real = self.embedding(encoding_indices.view(-1)).view(B, T, self.e_dim)  # (B, T, e_dim)
+        key_hard_real = key_hard_real.contiguous()
+
+        # store gradient
+        key_hard_real = key_hard + (key_hard_real - key_hard).detach()
+
+        return key_hard_real
+
+    def clustering_forward(self, key_soft, zero_ts_mask=None):
+        # key_soft shape (B, T, key_dim)
+        # zero_ts_mask (B)
+
+        # clustering forward process will not pass anything to policy & energy part!
+        key_soft = key_soft.contiguous()
+        B, T = key_soft.shape[0], key_soft.shape[1]
+        key_soft_norm = F.normalize(key_soft, p=2.0, dim=-1)
+        key_soft_flattened = key_soft_norm.view(B * T, self.key_dim)
+        classifier_linear_norm = F.normalize(self.classifier_linear.weight, p=2.0, dim=-1)
+        score_ksh = torch.einsum('bd,dn->bn', key_soft_flattened,
+                                 rearrange(classifier_linear_norm, 'n d -> d n'))
+        score_ksh = score_ksh.view(B, T, self.n_e)
+        score_ksh = torch.div(score_ksh, self.KT)
+
+        score_kss = torch.einsum('btc,bcs->bts', key_soft_norm,
+                                 rearrange(key_soft_norm, 'b t c -> b c t'))
+        score_kss = torch.div(score_kss, self.KT)
+
+        # score_khs = torch.einsum('bd,dn->bn', key_soft_flattened.detach(),
+        #                          rearrange(self.classifier_linear.weight, 'n d -> d n'))
+        # score_khs = score_khs.view(B, T, self.n_e)  # (B, T, n_e)
+
+        # score_khh = torch.einsum('nd,dm->nm', self.classifier_linear.weight,
+        #                          rearrange(self.classifier_linear.weight, 'n d -> d n'))
+
+        # choosing indices does not need gradient
+        with torch.no_grad():
+            # First timestep (0 step) in every context will use the nearest key
+            encoding_indices = torch.clip(
+                torch.argmax(score_ksh[:, 0, :], dim=1),
+                min=0,
+                max=(self.n_e-1)
+            )
+            if zero_ts_mask is not None:
+                encoding_indices = torch.where(zero_ts_mask, 0, encoding_indices)
+            encoding_indices = encoding_indices.unsqueeze(1)
+
+            # for the rest timestep, they will only select between form k_hard and its succesive key k_hard+
+            # e.g. when your hard key is #1 at context timestep 0,
+            #      your hard key is from {#1, #2} at context timestep 1,
+            for t in range(0, T - 1, 1):
+                score_t = score_ksh[:, (t + 1), :]
+
+                ind_here = encoding_indices[:, t:(t + 1)]
+                d_here = torch.gather(input=score_t, dim=1, index=ind_here)
+                ind_next = torch.clip(ind_here + 1, min=0, max=(self.n_e - 1))
+                d_next = torch.gather(input=score_t, dim=1, index=ind_next)
+
+                d_choice_mask = torch.greater_equal(d_here, d_next)
+                ind_new = torch.where(d_choice_mask, ind_here, ind_next)
+                encoding_indices = torch.cat([encoding_indices, ind_new], dim=1)
+
+        # # generate mask for score_khs, score_ksh
+        # mask_score_ksh = self.mask_ksh[encoding_indices]
+
+        min_indices, _ = torch.min(encoding_indices, dim=1)
+        max_indices, _ = torch.max(encoding_indices, dim=1)
+        v = torch.max(max_indices - min_indices)
+        v_global = torch.max(encoding_indices) - torch.min(encoding_indices)
+
+        return \
+            encoding_indices, v, v_global, score_kss, score_ksh
+
+    def forward(self, key_soft, zero_ts_mask=None, mode='policy'):
+        # key_soft shape (B, T, self.key_dim)
+        # zero_ts_mask (B)
+        if mode == 'policy':
+            return self.policy_forward(key_soft)
+        elif mode == 'cluster':
+            return self.clustering_forward(key_soft, zero_ts_mask)
+        else:
+            assert False
+
+
+class VQNeighborBasic(nn.Module):
+    def __init__(self, n_e, e_dim, legacy_cluster=0.2):
+        super().__init__()
+        self.n_e = n_e
+        self.e_dim = e_dim
+
+        self.legacy_cluster = legacy_cluster
+        self.embedding = nn.Embedding(1 + n_e, e_dim)
+        self.embedding.weight.data.uniform_(-1.0 / n_e, 1.0 / n_e)
+
+        # self.register_buffer('arranged_mask', torch.arange(n_e + 1)[:, None])
+
+    def select_from_index(self, indices):
+        # indices (B, T)
+        B, T = indices.shape
+        indices = indices.contiguous()
+        indices_flattened = indices.view(-1)  # (bs * T)
+        key_hard = self.embedding(indices_flattened).view(B, T, self.e_dim)
+        return key_hard
+
+    def get_key_soft_indices(self, key_soft, zero_ts_mask=None):
+        # key_soft: (B, T, self.e_dim)
+        key_soft = key_soft.contiguous()
+        B, T = key_soft.shape[0], key_soft.shape[1]
+        key_soft_flattened = key_soft.view(-1, self.e_dim)  # (bs * T, e_dim)
+
+        # choosing indices does not need gradient
+        with torch.no_grad():
+            d = torch.sum(key_soft_flattened ** 2, dim=1, keepdim=True) + \
+                torch.sum(self.embedding.weight ** 2, dim=1) - 2 * \
+                torch.einsum('bd,dn->bn', key_soft_flattened, rearrange(self.embedding.weight, 'n d -> d n'))
+            d = d.view(B, T, -1)  # reshape the distance back to (B, T, n_e)
+
+            # First timestep (0 step) in every context will use the nearest key
+            encoding_indices = torch.clip(
+                torch.argmin(d[:, 0, :], dim=1),
+                min=0,
+                max=(self.n_e - 1)
+            )
+            if zero_ts_mask is not None:
+                encoding_indices = torch.where(zero_ts_mask, 0, encoding_indices)
+            encoding_indices = encoding_indices.unsqueeze(1)
+
+            # for the rest timestep, they will only select between form k_hard and its succesive key k_hard+
+            # e.g. when your hard key is #1 at context timestep 0,
+            #      your hard key is from {#1, #2} at context timestep 1,
+            for t in range(0, T - 1, 1):
+                d_t = d[:, (t + 1), :]
+
+                ind_here = encoding_indices[:, t:(t + 1)]
+                d_here = torch.gather(input=d_t, dim=1, index=ind_here)
+                ind_next = torch.clip(ind_here + 1, min=0, max=(self.n_e - 1))
+                d_next = torch.gather(input=d_t, dim=1, index=ind_next)
+
+                d_choice_mask = torch.less_equal(d_here, d_next)
+                ind_new = torch.where(d_choice_mask, ind_here, ind_next)
+                encoding_indices = torch.cat([encoding_indices, ind_new], dim=1)
+
+        key_hard = self.embedding(encoding_indices.view(-1)).view(key_soft.shape)
+        key_hard.contiguous()
+
+        min_indices, _ = torch.min(encoding_indices, dim=1)
+        max_indices, _ = torch.max(encoding_indices, dim=1)
+        v = torch.max(max_indices - min_indices)
+        return encoding_indices, key_hard, v
+
+    def forward(self, key_soft, zero_ts_mask=None, preserve_grad=True):
+        # key_soft shape (bs, T, self.e_dim)
+        # zero_ts_mask (bs)
+        key_soft = key_soft.contiguous()
+        B, T = key_soft.shape[0], key_soft.shape[1]
+        key_soft_flattened = key_soft.view(-1, self.e_dim)  # (bs * T, e_dim)
+
+        # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
+        d = torch.sum(key_soft_flattened ** 2, dim=1, keepdim=True) \
+            + torch.sum(self.embedding.weight ** 2, dim=1) \
+            - 2 * torch.einsum('bd,dn->bn', key_soft_flattened, rearrange(self.embedding.weight, 'n d -> d n'))
+
+        with torch.no_grad():
+            min_indices = torch.argmin(d, dim=1)
+
+            d = d.view(B, T, self.n_e + 1)
+            # First timestep (0 step) in every context will use the nearest key
+            encoding_indices = torch.clip(
+                torch.argmin(d[:, 0, :], dim=1),
+                min=0,
+                max=(self.n_e - 1)
+            )
+            if zero_ts_mask is not None:
+                encoding_indices = torch.where(zero_ts_mask, 0, encoding_indices)
+            encoding_indices = encoding_indices.unsqueeze(1)
+
+            # for the rest timestep, they will only select between form k_hard and its succesive key k_hard+
+            # e.g. when your hard key is #1 at context timestep 0,
+            #      your hard key is from {#1, #2} at context timestep 1,
+            for t in range(0, T-1, 1):
+                d_t = d[:, (t + 1), :]
+                ind_here = encoding_indices[:, t:(t + 1)]
+                d_here = torch.gather(input=d_t, dim=1, index=ind_here)
+                ind_next = torch.clip(ind_here + 1, min=0, max=(self.n_e - 1))
+                d_next = torch.gather(input=d_t, dim=1, index=ind_next)
+                d_choice_mask = torch.less_equal(d_here, d_next)
+                ind_new = torch.where(d_choice_mask, ind_here, ind_next)
+                encoding_indices = torch.cat([encoding_indices, ind_new], dim=1)
+
+        encoding_indices_flattened = encoding_indices.view(-1)
+        key_hard_here = self.embedding(encoding_indices_flattened).view(key_soft.shape)
+        key_hard_next = self.embedding(torch.clip(encoding_indices_flattened + 1,
+                                                  min=0, max=self.n_e-1)).view(key_soft.shape)
+        key_min = self.embedding(min_indices).view(key_soft.shape)
+
+        # cluster choice
+        loss_here_base = \
+            torch.sum((key_soft.detach() - key_hard_here) ** 2, dim=-1) * self.legacy_cluster \
+            + torch.sum((key_soft - key_hard_here.detach()) ** 2, dim=-1)  # * self.legacy_cluster
+        loss_next_base = \
+            torch.sum((key_soft.detach() - key_hard_next) ** 2, dim=-1) * self.legacy_cluster \
+            + torch.sum((key_soft - key_hard_next.detach()) ** 2, dim=-1)  # * self.legacy_cluster
+        loss_min_indices = \
+            torch.sum((key_soft.detach() - key_min) ** 2, dim=-1) \
+            + torch.sum((key_soft - key_min.detach()) ** 2, dim=-1) * self.legacy_cluster
+        # print(loss_min_indices.shape)
+        loss_min_here = torch.where(torch.less(loss_min_indices, loss_here_base), loss_min_indices, 0.0)
+        loss_min_next = torch.where(torch.less(loss_min_indices, loss_next_base), loss_min_indices, 0.0)
+        loss_here = loss_here_base - loss_min_here
+        loss_next = loss_next_base - loss_min_next
+
+        # preserve gradients
+        if preserve_grad:
+            key_hard = key_soft + (key_hard_here - key_soft).detach()
+        key_hard = key_hard.contiguous()
+
+        min_indices, _ = torch.min(encoding_indices, dim=1)
+        max_indices, _ = torch.max(encoding_indices, dim=1)
+        v = torch.max(max_indices - min_indices)
+
+        return \
+            key_hard, encoding_indices, v, \
+            loss_here, loss_next
+
+
 class VQNeighbor2(nn.Module):
     def __init__(self, n_e, e_dim, legacy_cluster=0.2):
         super().__init__()
@@ -135,13 +764,17 @@ class VQNeighbor2(nn.Module):
         loss_next_base = \
             torch.sum((key_soft.detach() - key_hard_next) ** 2, dim=-1) \
             + torch.sum((key_soft - key_hard_next.detach()) ** 2, dim=-1) * self.legacy_cluster
-        loss_next_reg = torch.exp(-loss_here_base)
-        loss_here_reg = torch.exp(-loss_next_base)
+        loss_next_reg = -loss_here_base
+        loss_here_reg = -loss_next_base
 
         # energy
-        q_soft = self.key_to_qe(key_soft)
-        q_hard_here = self.key_to_qe(key_hard_here)
-        q_hard_next = self.key_to_qe(key_hard_next)
+        # q_soft = self.key_to_qe(key_soft)
+        # q_hard_here = self.key_to_qe(key_hard_here)
+        # q_hard_next = self.key_to_qe(key_hard_next)
+
+        q_soft = key_soft
+        q_hard_here = key_hard_here
+        q_hard_next = key_hard_next
 
         energy = \
             (torch.sum((q_soft.detach() - q_hard_next) ** 2, dim=-1)
