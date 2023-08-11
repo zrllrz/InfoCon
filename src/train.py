@@ -14,6 +14,7 @@ from autocot import (
     ImplicitSAResFCConfig,
     ImplicitSAGPTConfig,
     ExplicitSAGPTConfig,
+    ExplicitSAHNGPTConfig,
     ExplicitSAHNConfig,
     ActCommitNetConfig,
     RecNetConfig,
@@ -59,6 +60,8 @@ def parse_args():
     #                     help="Number of attention layers in RecNet")
     parser.add_argument("--n_key_layer", default=4, type=int,
                         help="Number of attention layers in KeyNet")
+    parser.add_argument("--te_key_dim", default=128, type=int,
+                        help="Number of attention layers in KeyNet")
     parser.add_argument("--n_rec_layer", default=4, type=int,
                         help="Number of attention layers in RecNet")
 
@@ -68,6 +71,8 @@ def parse_args():
                         help="Temperature for classifier")
     parser.add_argument('--coe_lip', type=str, default='2.0',
                         help="Lip Constant")
+    parser.add_argument("--coe_cluster", default='0.1', type=str, help="cluster weight")
+    parser.add_argument("--coe_rec", default='1.0', type=str, help="reconstruction weight from key_soft")
     # parser.add_argument('--repulse', action='store_true',
     #                     help="weight of clustering (classifier) loss")
     # parser.add_argument('--c_ss', type=str, default='1.0',
@@ -81,7 +86,7 @@ def parse_args():
     # parser.add_argument('--vq_decay_energy', type=str, default='0.1', help="decay coe for energy calc")
     # parser.add_argument('--vq_coe_structure', type=str, default='0.1', help="Coefficient in the VQ loss")
 
-    parser.add_argument("--sa_type", default='gpt', type=str, choices=['gpt', 'egpt', 'resfc', 'hn'],
+    parser.add_argument("--sa_type", default='gpt', type=str, choices=['gpt', 'egpt', 'egpthn', 'resfc', 'hn'],
                         help="type of sa_net")
     parser.add_argument("--n_state_layer", default=1, type=int,
                         help="Number of layers for state prediction in SANet")
@@ -89,6 +94,8 @@ def parse_args():
                         help="Number of layers (after state prediction) for action prediction in SANet")
     parser.add_argument("--use_pos_emb", action='store_true',
                         help="if True, use key energy gradient to evaluate effect of key states, only use when resfc")
+    parser.add_argument("--use_skip", action='store_true',
+                        help="if True, use skip connection for HN generated net when using HN")
 
     # General hyper-parameters regarding module loading and saving
     parser.add_argument("--model_name", default='TEST', type=str, help="Model name (for storing ckpts).")
@@ -138,7 +145,9 @@ if __name__ == "__main__":
         + '-' + args.sa_type + '_s' + str(args.n_state_layer) + '_a' + str(args.n_action_layer) \
         + '-emb' + str(args.n_embd) \
         + '-key' + str(args.dim_key) \
-        + '-e' + str(args.dim_e)
+        + '-e' + str(args.dim_e) \
+        + '-cluster' + args.coe_cluster + '-rec' + args.coe_rec \
+        + '-te_key_dim' + str(args.te_key_dim)
 
     # + '-ss' + args.c_ss + '-sh' + args.c_sh + '-hs' + args.c_hs + '-hh' + args.c_hh \
 
@@ -221,6 +230,19 @@ if __name__ == "__main__":
             n_state_layer=args.n_state_layer,
             max_timestep=train_dataset.max_steps
         )
+    elif args.sa_type == 'egpthn':
+        sa_config = ExplicitSAHNGPTConfig(
+            n_embd=args.n_embd,
+            n_head=args.n_head,
+            attn_pdrop=float(args.dropout),
+            resid_pdrop=float(args.dropout),
+            embd_pdrop=float(args.dropout),
+            block_size=args.context_length,
+            n_layer=args.n_action_layer,
+            n_state_layer=args.n_state_layer,
+            use_skip=args.use_skip,
+            max_timestep=train_dataset.max_steps
+        )
     elif args.sa_type == 'hn':
         sa_config = ExplicitSAHNConfig(
             dim_h=args.n_embd * args.n_state_layer,
@@ -234,35 +256,13 @@ if __name__ == "__main__":
         print('unknown sa_config.type')
         assert False
 
-    # act_config = ActCommitNetConfig(
-    #     n_embd=args.n_embd,
-    #     n_head=args.n_head,
-    #     attn_pdrop=float(args.dropout),
-    #     resid_pdrop=float(args.dropout),
-    #     embd_pdrop=float(args.dropout),
-    #     block_size=args.context_length,
-    #     n_layer=args.n_act_layer,
-    #     max_timestep=train_dataset.max_steps,
-    #     commit=False,
-    #     use_key_energy=args.use_key_energy
-    # )
-    #
-    # e_config = ENetConfig(
-    #     n_embd=args.n_embd,
-    #     n_head=args.n_head,
-    #     attn_pdrop=float(args.dropout),
-    #     resid_pdrop=float(args.dropout),
-    #     embd_pdrop=float(args.dropout),
-    #     block_size=args.context_length,
-    #     n_layer=args.n_e_layer,
-    #     max_timestep=train_dataset.max_steps,
-    # )
-
     optimizer_config = {
         'init_lr': float(args.init_lr),
         'weight_decay': float(args.weight_decay),
         'beta1': float(args.beta1),
-        'beta2': float(args.beta2)
+        'beta2': float(args.beta2),
+        'coe_cluster': float(args.coe_cluster),
+        'coe_rec': float(args.coe_rec)
     }
     assert args.lr_schedule in ['cos_decay_with_warmup', 'multistep', None], 'Unknown lr scheduler'
     if args.lr_schedule == 'cos_decay_with_warmup':
@@ -292,7 +292,7 @@ if __name__ == "__main__":
         action_dim=action_dim,
         key_dim=args.dim_key,
         e_dim=args.dim_e,
-        coe_lip=float(args.coe_lip)
+        te_keys_dim=None if (args.te_key_dim == 0) else args.te_key_dim
     )
 
     # autocot_model.configure_optimizers()

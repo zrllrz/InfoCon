@@ -369,20 +369,22 @@ class ExplicitSAGPT(nn.Module):
             module.weight.data.fill_(1.0)
 
     def get_reward(self, states, keys=None):
+        assert keys is not None
         x_states = self.state_encoder_0(states)  # The judgement is unrelated to time...
 
         for i in range(self.n_state_layer):
             x_states = self.reward_block[i](x_states, keys, last_activation=(i == (self.n_state_layer-1)))
         x_r = self.state_decoder(x_states)  # (B, T, key_dim)
+        x_r_norm = F.normalize(x_r, p=2.0, dim=-1)  # (B, T, key_dim)
         r = F.sigmoid(F.cosine_similarity(keys, x_r, dim=-1))
-        return r
+        return r, x_r_norm
 
     def forward(self, states, timesteps, actions=None, keys=None):
         B, T = states.shape[0], states.shape[1]
         states.requires_grad = True
 
         # Get state gradient
-        r = self.get_reward(states, keys)
+        r, v_r_norm = self.get_reward(states, keys)
         r_sum = r.sum()
         states_grad = torch.autograd.grad(r_sum, states, retain_graph=True, create_graph=True)[0]
 
@@ -416,7 +418,7 @@ class ExplicitSAGPT(nn.Module):
         x_action = self.ln(x)
         action_preds = self.action_predictor(x_action[:, 1:(T * 3):3, :])
         # Use it as ActNet, do action prediction
-        return action_preds, r
+        return action_preds, r, v_r_norm
 
 
 class ExplicitSAHNGPT(nn.Module):
@@ -430,19 +432,23 @@ class ExplicitSAHNGPT(nn.Module):
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.key_dim = key_dim
+        self.n_embd = config.n_embd
 
         self.block_size = config.block_size * 3
 
         self.n_state_layer = config.n_state_layer  # numbers of layers for reward generation
 
         # layers to get state grad
-        self.state_encoder_0 = MLP(state_dim, config.n_embd, hidden_dims=[])
-
-        self.reward_block = \
-            nn.ModuleList(
-                CondResnetBlockFC(config.n_embd, key_dim, beta=0) for _ in range(config.n_state_layer)
-            )
-        self.state_decoder = nn.Linear(config.n_embd, key_dim, bias=False)
+        self.state_encoder_0 = nn.Linear(state_dim, config.n_embd)
+        # hypernet part
+        self.hn_0 = nn.ModuleList(
+            nn.Linear(key_dim, config.n_state_layer, bias=False) for _ in range(config.n_state_layer - 1)
+        )
+        # NOTICE: We SUPPOSE that your input KEY DIM is actually (key_dim * config.n_state_layer)
+        self.hn_hidden_1 = nn.Linear(config.n_state_layer, config.n_embd * (config.n_embd + 1), bias=False)
+        self.hn_out_1 = nn.Linear(key_dim, config.n_embd, bias=False)
+        self.use_skip = config.use_skip  # whether to use skip connection in output network
+        self.activation = nn.ReLU()
 
         # Below tries to use the gradient info to get policy (action prediction)
         self.local_pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
@@ -475,21 +481,63 @@ class ExplicitSAHNGPT(nn.Module):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
+    # Try to use HyperNet to generate a network
     def get_reward(self, states, keys=None):
+        # states (B, T, state_dim)
+        # keys (B, T, key_dim * n_state_layer)
+        assert keys is not None
+        B, T, _ = states.shape
         x_states = self.state_encoder_0(states)  # The judgement is unrelated to time...
 
-        for i in range(self.n_state_layer):
-            x_states = self.reward_block[i](x_states, keys, last_activation=(i == (self.n_state_layer-1)))
-        x_r = self.state_decoder(x_states)  # (B, T, key_dim)
-        r = F.sigmoid(F.cosine_similarity(keys, x_r, dim=-1))
-        return r
+        x_hidden = x_states  # (B, T, n_embd)
+        x_remain = x_states  # (B, T, n_embd)
+        cnt_skip = 0
+
+        for i in range(self.n_state_layer - 1):
+            cnt_skip += int(self.use_skip)
+            key_i = keys[..., i*self.key_dim:(i+1)*self.key_dim]  # (B, T, key_dim)
+            # print('key_i.shape', key_i.shape)
+            whn_i = self.hn_0[i](key_i)  # (B, T, self.n_state_layer)
+            # print('whn_i.shape', whn_i.shape)
+            params_i = self.hn_hidden_1(whn_i)  # (B, T, n_embd * (n_embd + 1))
+            # print('params_i.shape', params_i.shape)
+            w_i = params_i[..., :(-self.n_embd)].view(B, T, self.n_embd, self.n_embd)  # (B, T, n_embd, n_embd)
+            # print('w_i.shape', w_i.shape)
+            b_i = params_i[..., (-self.n_embd):]  # (B, T, n_embd)
+            # print('b_i.shape', b_i.shape)
+            x_hidden = (x_hidden.unsqueeze(2) @ w_i).squeeze(2)  # (B, T, n_embd)
+            # print('x_hidden.shape', x_hidden.shape)
+            x_hidden = b_i + x_hidden
+            # print('x_hidden.shape', x_hidden.shape)
+            if cnt_skip == 2:  # always 2 with skip
+                x_hidden = x_hidden + x_remain  # skip connection
+                # print('x_hidden.shape', x_hidden.shape)
+                if i != (self.n_state_layer - 2):
+                    x_hidden = self.activation(x_hidden)
+                    # print('x_hidden.shape', x_hidden.shape)
+                x_remain = x_hidden  # update remain
+                # print('x_remain.shape', x_hidden.shape)
+                cnt_skip = 0
+            else:
+                if i != (self.n_state_layer - 2):
+                    x_hidden = self.activation(x_hidden)
+                    # print('x_hidden.shape', x_hidden.shape)
+
+        v_r_norm = F.normalize(x_hidden, p=2.0, dim=-1)
+        # last layer
+        key_last = keys[..., (-self.key_dim):]  # (B, T, key_dim)
+        mu_last = self.hn_out_1(key_last)  # (B, T, n_embd)
+        cos_score = F.cosine_similarity(mu_last, x_hidden, dim=-1)  # (B, T)
+        r = F.sigmoid(cos_score)
+
+        return r, v_r_norm
 
     def forward(self, states, timesteps, actions=None, keys=None):
         B, T = states.shape[0], states.shape[1]
         states.requires_grad = True
 
         # Get state gradient
-        r = self.get_reward(states, keys)
+        r, v_r_norm = self.get_reward(states, keys)
         r_sum = r.sum()
         states_grad = torch.autograd.grad(r_sum, states, retain_graph=True, create_graph=True)[0]
 
@@ -523,7 +571,7 @@ class ExplicitSAHNGPT(nn.Module):
         x_action = self.ln(x)
         action_preds = self.action_predictor(x_action[:, 1:(T * 3):3, :])
         # Use it as ActNet, do action prediction
-        return action_preds, r
+        return action_preds, r, v_r_norm
 
 
 class ENet(nn.Module):

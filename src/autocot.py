@@ -4,8 +4,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from module.module_util import FreqEncoder
 from module.VQ import VQClassifierNN, VQClassifier, VQNeighbor, VQNeighbor2, VQElastic, VQNeighborBasic
-from module.GPT import KeyNet, RecNet, ImplicitSAGPT, ExplicitSAGPT, ActCommitNet, ENet, MLP
+from module.GPT import KeyNet, RecNet, ImplicitSAGPT, ExplicitSAGPT, ExplicitSAHNGPT, ActCommitNet, ENet, MLP
 from module.ResNetFC import ImplicitSAResFC, ExplicitSAHN
 
 import pytorch_lightning as pl
@@ -90,6 +91,19 @@ class ExplicitSAGPTConfig(RootConfig):
         )
         self.n_state_layer = n_state_layer
 
+class ExplicitSAHNGPTConfig(RootConfig):
+    def __init__(self, n_embd, n_head,
+                 attn_pdrop, resid_pdrop, embd_pdrop,
+                 block_size, n_layer, n_state_layer, use_skip, max_timestep):
+        self.type = 'egpthn'
+        super().__init__(
+            n_embd, n_head,
+            attn_pdrop, resid_pdrop, embd_pdrop,
+            block_size, 'w_key', n_layer, max_timestep
+        )
+        self.n_state_layer = n_state_layer
+        self.use_skip = use_skip
+
 
 class ENetConfig(RootConfig):
     def __init__(self, n_embd, n_head,
@@ -141,7 +155,9 @@ class AutoCoT(pl.LightningModule):
         action_dim=-1,
         key_dim=-1,
         e_dim=-1,
-        coe_lip=2.0
+        te_keys_dim=None,
+        coe_lip_pos=1.0,
+        coe_lip_neg=0.5
     ):
         super().__init__()
 
@@ -158,14 +174,35 @@ class AutoCoT(pl.LightningModule):
             action_dim=action_dim,
             key_dim=key_dim
         )
+
+        if te_keys_dim is not None:
+            assert type(te_keys_dim) == int
+            self.ks_t_emb = FreqEncoder(length=te_keys_dim)
+            tek_dim = te_keys_dim
+        else:
+            self.ks_t_emb = None
+            tek_dim = 0
+
         self.rec_net = RecNet(
             config=rec_config,
             state_dim=state_dim,
-            key_dim=key_dim
+            key_dim=key_dim+tek_dim
         )
 
         print('block size =', key_config.block_size)
         block_size = key_config.block_size
+
+        # mask for key soft time-steps constraint
+        check_mask_base = 1 - torch.tril(torch.ones(block_size, block_size))
+        check_mask_sum = torch.cumsum(check_mask_base, dim=-1)
+        check_mask_0 = ((check_mask_sum % 2 == 1) * check_mask_base).to(dtype=torch.float32)
+        check_mask_1 = ((check_mask_sum % 2 == 0) * check_mask_base).to(dtype=torch.float32)
+        check_mask_0 = check_mask_0[:-1, 1:]
+        check_mask_1 = check_mask_1[:-1, 1:]
+        print('check_mask_0 =\n', check_mask_0)
+        print('check_mask_1 =\n', check_mask_1)
+        self.register_buffer('cm', torch.stack([check_mask_0, check_mask_1], dim=0))
+        self.cycle_key_soft = 0
 
         # mask for clustering between key_soft
         arange = torch.arange(block_size, dtype=torch.float32)
@@ -206,6 +243,13 @@ class AutoCoT(pl.LightningModule):
                 action_dim=action_dim,
                 key_dim=e_dim
             )
+        elif sa_config.type == 'egpthn':
+            self.sa_net = ExplicitSAHNGPT(
+                config=sa_config,
+                state_dim=state_dim,
+                action_dim=action_dim,
+                key_dim=e_dim
+            )
         else:
             print('unknown sa_config.type')
             assert False
@@ -214,19 +258,35 @@ class AutoCoT(pl.LightningModule):
         # every soft key will be mapped to a hard key in the book using a restrict nearest neighbour
         # which will make sure the indices are close...
         self.key_book = VQClassifierNN(
-            key_dim=key_dim,
+            key_dim=key_dim+tek_dim,
             n_e=vq_n_e,
-            e_dim=e_dim * sa_config.reward_layer if sa_config.type == 'hn' else e_dim,
+            e_dim=e_dim * sa_config.n_state_layer if (sa_config.type == 'hn' or sa_config.type == 'egpthn') else e_dim,
             KT=KT,
         )
 
-        self.LIP = log(coe_lip)
+        # When training, we need to adjust the goal function part in sa_net
+        # so that every goal function (params by the chosen out v_param) can discriminate
+        # whether a certain state is at the finishing state of this situation
+        # this is like we have vq_n_e x 2 class classifier
+        # we do not choose to update all of them every iter
+        # (it will be hard when vq_n_e is larger, while 'clustering itself is the source of collapse')
+        # we will use a circle way to update them
+        self.vq_n_e = vq_n_e
+        self.vq_turn = 0  # start from 0, circle movement, update the first meet index
+                          # which some states are classified to during this iter
+
+        self.LIP_POS = coe_lip_pos
+        self.LIP_NEG = coe_lip_neg
+
+        self.coe_cluster = optimizers_config['coe_cluster']
+        self.coe_rec = optimizers_config['coe_rec']
 
         self.step = 0
 
         self.step_cluster = 0
-        self.cyc_cluster = 10
+        self.cyc_cluster = 1
         self.flag_cluster = False
+        self.goal_cluster = True
 
         self.automatic_optimization = False
 
@@ -257,6 +317,27 @@ class AutoCoT(pl.LightningModule):
             torch.set_printoptions(precision=8, sci_mode=False)
             print(table)
 
+    def loss_reward(self, states, indices):
+        # indices (B, T) choice of index of this batch
+        # reward (B, T) along with their reward ([0, 1] classifier score)
+        B, T = indices.shape
+        assert self.sa_type == 'egpt' or self.sa_type == 'egpthn'
+        for di in range(self.key_book.n_e):
+            self.vq_turn = ((self.vq_turn + 1) % self.key_book.n_e)
+            mask_i = torch.eq(indices, self.vq_turn)
+            n_i = mask_i.sum()
+            if n_i != 0:
+                # update the reward function of this part
+                key_same_i = self.key_book.vparams(torch.tensor([[self.vq_turn]], device=states.device))
+                key_same_i = key_same_i.repeat(B, T, 1)
+                reward_i, _ = self.sa_net.get_reward(states, key_same_i)
+                reward_i = torch.where(mask_i, reward_i, 1.0 - reward_i)  # other should be different
+                return reward_i
+                # return torch.zeros_like(indices, dtype=torch.float32, device=states.device)
+
+        print('in autocot method: loss_reward: should not reach here!')
+        assert False
+
 
     def training_step(self, batch, batch_idx):
         # separate optimzing whole net and the embedding space
@@ -271,20 +352,36 @@ class AutoCoT(pl.LightningModule):
         ##############################################################################
         # first forward, use policy and implicit energy to adjust key_soft, key_book #
         ##############################################################################
-        key_soft, state_recs = self.key_net(states, timesteps, actions)
+        key_soft, state_trans = self.key_net(states, timesteps, actions)
+        if self.ks_t_emb is not None:
+            key_soft_te = self.ks_t_emb(unified_t)  # (B, T, te_keys_dim)
+            key_soft = torch.cat([key_soft, key_soft_te], dim=-1)  # (B, T, key_dim + te_keys_dim)
         state_recs_from_keys = self.rec_net(key_soft, timesteps)
+
+        # loss: state transmission
+        l_s_trans, _ = get_loss(state_trans, states[:, 1:, ...], lengths - 1)
+        # loss: state reconstruction
         l_s_recs, _ = get_loss(state_recs_from_keys, states, lengths)
 
-        encoding_indices, v_global, _, vparams_hard, score_vpss_1, score_vpsh_1, _, _ \
+        encoding_indices, v_global, _, vparams_hard, score_vpss_1, score_vpsh_1, score_kss_1, _ \
             = self.key_book(key_soft)
+
+        # loose time step regularization
+        # closer time step, closer key_soft feature
+        # need sigmoid? need log?
+        skss_rl = torch.log(F.sigmoid(score_kss_1[:, :, 1:])) - torch.log(F.sigmoid(score_kss_1[:, :, :-1]))
+        skss_rl = torch.maximum(skss_rl + 1e-12, torch.zeros_like(skss_rl))
+        skss_rl = skss_rl[:, :-1, :] * self.cm[self.cycle_key_soft].unsqueeze(0)
+        skss_ud = torch.log(F.sigmoid(score_kss_1[:, :-1, :])) - torch.log(F.sigmoid(score_kss_1[:, 1:, :]))
+        skss_ud = torch.maximum(skss_ud + 1e-12, torch.zeros_like(skss_ud))
+        skss_ud = skss_ud[:, :, 1:] * self.cm[self.cycle_key_soft].unsqueeze(0)
+        loss_key_soft_adj = skss_rl.mean() + skss_ud.mean()
+        self.cycle_key_soft = ((self.cycle_key_soft + 1) % 2)
 
         if self.sa_type == 'hn':
             # currently hyper net implementation only have
             action_preds = self.sa_net(states, timesteps, keys=vparams_hard)
 
-            # loss: state reconstruction
-            l_s_trans, _ = get_loss(state_recs, states[:, 1:, ...], lengths - 1)
-
             # loss: state prediction & action prediction
             l_s_preds = 0.0
             l_a_preds, _ = get_loss(action_preds, actions, lengths)
@@ -293,40 +390,41 @@ class AutoCoT(pl.LightningModule):
             #######
             # ??? #
             #######
-            l_policy = l_a_preds + l_s_trans + l_s_recs
+            l_policy = l_a_preds + l_s_trans + self.coe_rec * (l_s_recs + loss_key_soft_adj)
 
-        elif self.sa_type == 'egpt':
-            action_preds, reward = self.sa_net(states, timesteps, actions=actions, keys=vparams_hard)
-
-            # loss: state reconstruction
-            l_s_trans, _ = get_loss(state_recs, states[:, 1:, ...], lengths - 1)
+        elif self.sa_type == 'egpt' or self.sa_type == 'egpthn':
+            action_preds, reward, v_r_norm = self.sa_net(states, timesteps, actions=actions, keys=vparams_hard)
 
             # loss: state prediction & action prediction
             l_s_preds = 0.0
             l_a_preds, _ = get_loss(action_preds, actions, lengths)
 
             # need some regulation on the explicit reward (ascent reward, large at switching point)
-            #######
-            # ??? #
-            #######
-            l_policy = l_a_preds + l_s_trans + l_s_recs
+            l_policy = l_a_preds + l_s_trans + self.coe_rec * (l_s_recs + loss_key_soft_adj)
             if self.flag_cluster:
                 # reward is the prob of completion
                 # (1.0 - reward) is the prob of un-completion
                 # log(1.0 - reward) should be as large as possible
                 # minimize -log(1.0 - reward)
-                l_policy = l_policy + torch.neg(torch.log(1.0 - reward)).mean()
+                # also we need to update one set of classifier during onr iteration
+
+                # Two direction Lip Constraint
+                reward_i = self.loss_reward(states, indices=encoding_indices)
+
+                l_policy = \
+                    l_policy \
+                    + self.coe_cluster * (
+                        torch.neg(torch.log(1.0 - reward)).mean()
+                        + torch.neg(torch.log(1.0 - reward_i)).mean()
+                    )
 
         else:
             action_preds, state_preds = self.sa_net(states, timesteps, keys=vparams_hard, predict_state=True)
 
-            # loss: state reconstruction
-            l_s_trans, _ = get_loss(state_recs, states[:, 1:, ...], lengths - 1)
-
             # loss: state prediction & action prediction
             l_s_preds, _ = get_loss(state_preds[:, :-1, ...], states[:, 1:, ...], lengths - 1)
             l_a_preds, _ = get_loss(action_preds, actions, lengths)
-            l_policy = l_s_preds + l_a_preds + l_s_trans
+            l_policy = l_s_preds + l_a_preds + l_s_trans + self.coe_rec * (l_s_recs + loss_key_soft_adj)
 
         opt_policy.zero_grad()
         self.manual_backward(l_policy)
@@ -340,7 +438,8 @@ class AutoCoT(pl.LightningModule):
         ###################################################
         # second forward, for classification (clustering) #
         ###################################################
-        if self.sa_type != 'egpt' and self.flag_cluster:
+        if (self.sa_type != 'egpt' and self.sa_type != 'egpthn') and self.flag_cluster:
+            print('！@#¥%……&*（')
             key_soft, _ = self.key_net(states, timesteps, actions)
 
             encoding_indices, v_global, _, _, score_vpss_2, score_vpsh_2, score_kss_2, score_ksh_2 \
@@ -389,6 +488,7 @@ class AutoCoT(pl.LightningModule):
                 'rs': l_s_recs,
                 '?s': l_s_preds,
                 '?a': l_a_preds,
+                'regks': loss_key_soft_adj,
                 '©': l_cluster,
                 '©ss': log_logit_contrast_ss,
                 '©sh': log_logit_contrast_sh,
@@ -427,7 +527,6 @@ class AutoCoT(pl.LightningModule):
 
         whitelist_weight_modules = (torch.nn.Linear, torch.nn.Conv2d)
         blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
-
         for mn, m in self.named_modules():
             for pn, _ in m.named_parameters():
                 fpn = '%s.%s' % (mn, pn) if mn else pn  # full param name

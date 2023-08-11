@@ -1,5 +1,27 @@
+"""
+Reference:
+https://github.com/ashawkey/stable-dreamfusion
+"""
+
 import torch
 import torch.nn as nn
+
+
+class FreqEncoder(nn.Module):
+    def __init__(self, length=32):
+        super().__init__()
+
+        self.length = length
+        coe_freq = torch.remainder(torch.arange(length), 32)
+        coe_freq = torch.mul(torch.pow(2.0, coe_freq), torch.pi)
+        self.register_buffer('coe_freq', coe_freq.unsqueeze(0))
+
+    def forward(self, unified_t):
+        u_t = torch.sub(torch.mul(unified_t, 2.0), 1.0).unsqueeze(-1)
+        emb_cos = torch.cos(u_t @ self.coe_freq)
+        emb_sin = torch.sin(u_t @ self.coe_freq)
+        emb_t = torch.cat([u_t, emb_cos, emb_sin, u_t], dim=-1)
+        return emb_t
 
 
 class MLP(nn.Module):

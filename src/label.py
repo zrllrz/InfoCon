@@ -13,6 +13,8 @@ from autocot import (
     RecNetConfig,
     KeyNetConfig,
     ImplicitSAGPTConfig,
+    ExplicitSAGPTConfig,
+    ExplicitSAHNGPTConfig,
     ImplicitSAResFCConfig,
     ExplicitSAHNConfig,
     ENetConfig,
@@ -89,7 +91,7 @@ if __name__ == "__main__":
     # Load to cpu first to avoid cuda related errors from ManiSkill2.
     ckpt = torch.load(path, map_location=torch.device('cpu'))
     state_dict_from_ckpt, params = ckpt['module'], ckpt['metadata']
-    print(state_dict_from_ckpt['key_book.embedding.weight'].shape)
+    # print(state_dict_from_ckpt['key_book.embedding.weight'].shape)
 
     state_dim = state_dict_from_ckpt['key_net.state_encoder.net.0.weight'].shape[1]
     action_dim = state_dict_from_ckpt['key_net.action_encoder.net.0.weight'].shape[1]
@@ -272,6 +274,16 @@ if __name__ == "__main__":
         n_layer=params['n_key_layer'],
         max_timestep=max_timestep
     )
+    rec_config = RecNetConfig(
+        n_embd=params['n_embd'],
+        n_head=params['n_head'],
+        attn_pdrop=float(params['dropout']),
+        resid_pdrop=float(params['dropout']),
+        embd_pdrop=float(params['dropout']),
+        block_size=params['context_length'],
+        n_layer=params['n_rec_layer'],
+        max_timestep=max_timestep
+    )
 
     if params['sa_type'] == 'resfc':
         sa_config = ImplicitSAResFCConfig(
@@ -294,6 +306,30 @@ if __name__ == "__main__":
             state_layer=params['n_state_layer']-1,
             max_timestep=max_timestep
         )
+    elif params['sa_type'] == 'egpt':
+        sa_config = ExplicitSAGPTConfig(
+            n_embd=params['n_embd'],
+            n_head=params['n_head'],
+            attn_pdrop=float(params['dropout']),
+            resid_pdrop=float(params['dropout']),
+            embd_pdrop=float(params['dropout']),
+            block_size=params['context_length'],
+            n_layer=params['n_action_layer'],
+            n_state_layer=params['n_state_layer'],
+            max_timestep=max_timestep
+        )
+    elif params['sa_type'] == 'egpthn':
+        sa_config = ExplicitSAHNGPTConfig(
+            n_embd=params['n_embd'],
+            n_head=params['n_head'],
+            attn_pdrop=float(params['dropout']),
+            resid_pdrop=float(params['dropout']),
+            embd_pdrop=float(params['dropout']),
+            block_size=params['context_length'],
+            n_layer=params['n_action_layer'],
+            n_state_layer=params['n_state_layer'],
+            max_timestep=max_timestep
+        )
     elif params['sa_type'] == 'hn':
         sa_config = ExplicitSAHNConfig(
             dim_h=params['n_embd'] * params['n_state_layer'],
@@ -307,33 +343,13 @@ if __name__ == "__main__":
         print('Unknown sa_type')
         assert False
 
-    # act_config = ActCommitNetConfig(
-    #     n_embd=params['n_embd'],
-    #     n_head=params['n_head'],
-    #     attn_pdrop=float(params['dropout']),
-    #     resid_pdrop=float(params['dropout']),
-    #     embd_pdrop=float(params['dropout']),
-    #     block_size=params['context_length'],
-    #     n_layer=params['n_act_layer'],
-    #     max_timestep=max_timestep,
-    #     commit=False,
-    #     use_key_energy=params['use_key_energy']
-    # )
-    # e_config = ENetConfig(
-    #     n_embd=params['n_embd'],
-    #     n_head=params['n_head'],
-    #     attn_pdrop=float(params['dropout']),
-    #     resid_pdrop=float(params['dropout']),
-    #     embd_pdrop=float(params['dropout']),
-    #     block_size=params['context_length'],
-    #     n_layer=params['n_eact_layer'],
-    #     max_timestep=max_timestep,
-    # )
+
 
     print(params['vq_n_e'])
     autocot_model = AutoCoT(
         key_config=key_config,
         sa_config=sa_config,
+        rec_config=rec_config,
         vq_n_e=params['vq_n_e'],
         KT=float(params['KT']),
         optimizers_config=None,

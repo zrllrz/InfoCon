@@ -44,7 +44,7 @@ class VQClassifierNN(nn.Module):
             key_soft = v_soft  # (B, T, key_dim)
             with torch.no_grad():
                 B = key_soft.shape[0]
-                key_soft_norm = F.normalize(key_soft, dim=-1)
+                key_soft_norm = F.normalize(key_soft, p=2.0, dim=-1)
                 keys = self.keys.weight
                 keys_norm = F.normalize(keys, p=2.0, dim=-1)
                 keys_norm = keys_norm.view(1, self.n_e, self.key_dim).repeat(B, 1, 1)
@@ -57,34 +57,18 @@ class VQClassifierNN(nn.Module):
             vparams_soft = v_soft  # (B, T, e_dim)
             with torch.no_grad():
                 B = vparams_soft.shape[0]
-                vparams_soft_norm = F.normalize(vparams_soft, dim=-1)
-
+                vparams_soft_norm = F.normalize(vparams_soft, p=2.0, dim=-1)
                 vparams = self.vparams.weight
                 vparams_norm = F.normalize(vparams, p=2.0, dim=-1)
                 vparams_norm = vparams_norm.view(1, self.n_e, self.e_dim).repeat(B, 1, 1)
 
                 vp_cs_ss = torch.bmm(vparams_soft_norm, rearrange(vparams_soft_norm, 'b t c -> b c t'))
-                vp_cs_sh = torch.bmm(vparams_norm, rearrange(vparams_norm, 'b t c -> b c t'))
+                vp_cs_sh = torch.bmm(vparams_soft_norm, rearrange(vparams_norm, 'b t c -> b c t'))
 
                 return vp_cs_ss, vp_cs_sh
         else:
             print('unknown cos_sim type')
             assert False
-
-    # return: pn_change_ss, pn_change_sh
-    def cs_change(self, cs1, cs2):
-        cs_ss1, cs_sh1 = cs1
-        cs_ss2, cs_sh2 = cs2
-        with torch.no_grad():
-            cs_ss_change = cs_ss2 - cs_ss1
-            cs_sh_change = cs_sh2 - cs_sh1
-
-            pn_change_ss = torch.where(torch.less(cs_ss_change, torch.zeros_like(cs_ss_change)),
-                                       -1.0, 1.0)
-            pn_change_sh = torch.where(torch.less(cs_sh_change, torch.zeros_like(cs_sh_change)),
-                                       -1.0, 1.0)
-
-            return pn_change_ss, pn_change_sh
 
     def get_key_soft_indices(self, key_soft):
         # key_soft: (B, T, self.e_dim)
