@@ -15,7 +15,7 @@ from module_util import MLP
 
 
 class VQClassifierNN(nn.Module):
-    def __init__(self, key_dim, n_e, e_dim, KT=1.0):
+    def __init__(self, key_dim, n_e, e_dim, KT=1.0, use_ema=False, coe_ema=0.95):
         super().__init__()
         self.key_dim = key_dim
         self.n_e = n_e
@@ -30,8 +30,35 @@ class VQClassifierNN(nn.Module):
         self.vparams = nn.Embedding(n_e, e_dim)
         self.vparams.weight.data.uniform_(-1.0 / n_e, 1.0 / n_e)
 
+        self.use_ema = use_ema
+        self.coe_ema = coe_ema
+
         arange = torch.arange(n_e, dtype=torch.float32)
         self.register_buffer('arange', arange)
+        self.register_buffer('not_same', 1.0 - torch.eye(n_e))
+
+    def loss_dispersion(self):
+        keys_norm = F.normalize(self.keys.weight, p=2.0, dim=-1)  # (n_e, key_dim)
+        l_dispersion_k = torch.einsum('bd,dn->bn', keys_norm,
+                                      rearrange(keys_norm, 'n d -> d n'))  # (n_e, n_e)
+        l_dispersion_k = torch.exp(torch.div(l_dispersion_k, self.KT))   # (n_e, n_e)
+        l_dispersion_k = l_dispersion_k * self.not_same  # (n_e, n_e)
+        l_dispersion_k = torch.sum(l_dispersion_k, dim=-1)  # (n_e)
+        l_dispersion_k = torch.div(l_dispersion_k, float(self.n_e - 1))  # (n_e)
+        l_dispersion_k = torch.log(l_dispersion_k)  # (n_e)
+        l_dispersion_k = l_dispersion_k.mean()
+
+        vparams_norm = F.normalize(self.vparams.weight, p=2.0, dim=-1)  # (n_e, key_dim)
+        l_dispersion_vp = torch.einsum('bd,dn->bn', vparams_norm,
+                                       rearrange(vparams_norm, 'n d -> d n'))  # (n_e, n_e)
+        l_dispersion_vp = torch.exp(torch.div(l_dispersion_vp, self.KT))  # (n_e, n_e)
+        l_dispersion_vp = l_dispersion_vp * self.not_same  # (n_e, n_e)
+        l_dispersion_vp = torch.sum(l_dispersion_vp, dim=-1)  # (n_e)
+        l_dispersion_vp = torch.div(l_dispersion_vp, float(self.n_e - 1))  # (n_e)
+        l_dispersion_vp = torch.log(l_dispersion_vp)  # (n_e)
+        l_dispersion_vp = l_dispersion_vp.mean()
+
+        return l_dispersion_k + l_dispersion_vp
 
     def score_to_weight(self, score):
         # score (..., n_e)
@@ -169,8 +196,86 @@ class VQClassifierNN(nn.Module):
             encoding_indices, vparams_w, vparams_hard, \
             score_vpss, score_vpsh, score_kss, score_ksh
 
+    def ema_forward(self, key_soft):
+        # key_soft shape (B, T, self.key_dim)
+        key_soft = key_soft.contiguous()
+        B, T = key_soft.shape[0], key_soft.shape[1]
+
+        key_soft_norm = F.normalize(key_soft, p=2.0, dim=-1)  # (B, T, key_dim)
+        key_soft_flattened = key_soft_norm.view(B * T, self.key_dim)  # (B*T, key_dim)
+        keys_norm = F.normalize(self.keys.weight.detach(), p=2.0, dim=-1)  # (n_e, key_dim)
+
+        # calc score_ksh
+        score_ksh_flattened = torch.einsum('bd,dn->bn', key_soft_flattened,
+                                           rearrange(keys_norm, 'n d -> d n'))  # (B*T, n_e)
+
+        # Neareset Neighbor for indices and hard vparams
+        encoding_indices_flattened = torch.argmax(score_ksh_flattened, dim=1)  # (B*T)
+        encoding_indices = encoding_indices_flattened.view(B, T)  # (B, T)
+
+        # EMA update of keys behind
+        with torch.no_grad():
+            sum_mask = torch.eq(
+                self.arange.view(-1, 1).repeat(1, B * T),
+                encoding_indices_flattened.view(1, -1).repeat(self.n_e, 1)
+            ).to(dtype=torch.float32)
+            cnt = torch.sum(sum_mask, dim=-1, keepdim=True)  # (n_e, 1)
+            mean_key_soft = torch.div(sum_mask @ key_soft_flattened, cnt)  # (n_e, key_dim)
+            mean_key_soft = torch.nan_to_num(mean_key_soft)  # (n_e, key_dim)
+            self.keys.weight.data = F.normalize(
+                self.keys.weight.data * self.coe_ema + mean_key_soft * (1.0 - self.coe_ema),
+                p=2.0, dim=-1
+            )
+        # re-calculate score_ksh...
+        # calc score_ksh
+        score_ksh_flattened = torch.einsum('bd,dn->bn', key_soft_flattened,
+                                           rearrange(self.keys.weight.detach(), 'n d -> d n'))  # (B*T, n_e)
+        score_ksh = score_ksh_flattened.view(B, T, self.n_e)  # (B, T, n_e)
+        # transmit into weight
+        w_flattened = self.score_to_weight(score_ksh_flattened)  # (B*T, n_e)
+
+        # choose out prototype prob for each soft key (after update...)
+        w_max_flattened = torch.gather(w_flattened, dim=-1, index=encoding_indices_flattened.unsqueeze(-1)).squeeze(-1)
+        w_max = w_max_flattened.view(B, T)
+
+        # calc score_kss
+        score_kss = torch.einsum('btc,bcs->bts', key_soft_norm,
+                                 rearrange(key_soft_norm, 'b t c -> b c t'))  # (B, T, T)
+
+        # to weighted params
+        vparams_norm = F.normalize(self.vparams.weight, p=2.0, dim=-1)  # (n_e, e_dim)
+        vparams_w_flattened = w_flattened.view(B * T, 1, self.n_e) @ vparams_norm.view(1, self.n_e, self.e_dim).detach()
+        vparams_w_flattened = vparams_w_flattened.squeeze(1)  # (B*T, e_dim)
+        vparams_w_flattened = F.normalize(vparams_w_flattened, p=2.0, dim=-1)  # (B*T, e_dim)
+        vparams_w = vparams_w_flattened.view(B, T, self.e_dim)  # (B, T, e_dim)
+        vparams_w = vparams_w.contiguous()  # (B, T, e_dim)
+
+        # calc score_vpsh (cos sim between vparams_w and self.vparams)
+        score_vpsh_flattened = torch.einsum('bd,dn->bn', vparams_w_flattened,
+                                            rearrange(vparams_norm, 'n d -> d n'))  # (B*T, n_e)
+        score_vpsh = score_vpsh_flattened.view(B, T, self.n_e)  # (B, T, n_e)
+
+        # calc score_vpss (cos sim between vparams_w)
+        score_vpss = torch.einsum('btc,bcs->bts', vparams_w,
+                                  rearrange(vparams_w, 'b t c -> b c t'))  # (B, T, T)
+
+        vparams_hard = self.vparams(encoding_indices).view(B, T, self.e_dim)  # (B, T, e_dim)
+        vparams_hard = F.normalize(vparams_hard, p=2.0, dim=-1)  # normalization (B, T, e_dim)
+        vparams_hard = vparams_hard.contiguous()
+        vparams_hard = vparams_w + (vparams_hard - vparams_w).detach()  # store gradient
+
+        v_global = torch.max(encoding_indices) - torch.min(encoding_indices)
+
+        return \
+            encoding_indices, v_global, \
+            vparams_w, vparams_hard, w_max, \
+            score_vpss, score_vpsh, score_kss, score_ksh
+
     def forward(self, key_soft):
         # key_soft shape (B, T, self.key_dim)
+        if self.use_ema:
+            return self.ema_forward(key_soft)
+
         key_soft = key_soft.contiguous()
         B, T = key_soft.shape[0], key_soft.shape[1]
 
@@ -190,7 +295,7 @@ class VQClassifierNN(nn.Module):
         # to weighted params
         w_flattened = self.score_to_weight(score_ksh_flattened)  # (B*T, n_e)
         vparams_norm = F.normalize(self.vparams.weight, p=2.0, dim=-1)  # (n_e, e_dim)
-        vparams_w_flattened = w_flattened.view(B * T, 1, self.n_e) @ vparams_norm.view(1, self.n_e, self.e_dim)
+        vparams_w_flattened = w_flattened.view(B * T, 1, self.n_e) @ vparams_norm.view(1, self.n_e, self.e_dim).detach()
         vparams_w_flattened = vparams_w_flattened.squeeze(1)  # (B*T, e_dim)
         vparams_w_flattened = F.normalize(vparams_w_flattened, p=2.0, dim=-1)  # (B*T, e_dim)
         vparams_w = vparams_w_flattened.view(B, T, self.e_dim)  # (B, T, e_dim)
@@ -207,6 +312,9 @@ class VQClassifierNN(nn.Module):
 
         # Neareset Neighbor for indices and hard vparams
         encoding_indices = torch.argmax(score_ksh_flattened, dim=1)  # (B*T)
+
+        w_max_flattened = torch.max(w_flattened, dim=-1)[0]
+        w_max = w_max_flattened.view(B, T)
         encoding_indices = encoding_indices.view(B, T)  # (B, T)
 
         vparams_hard = self.vparams(encoding_indices).view(B, T, self.e_dim)  # (B, T, e_dim)
@@ -218,7 +326,7 @@ class VQClassifierNN(nn.Module):
 
         return \
             encoding_indices, v_global, \
-            vparams_w, vparams_hard, \
+            vparams_w, vparams_hard, w_max, \
             score_vpss, score_vpsh, score_kss, score_ksh
 
 class VQClassifier(nn.Module):

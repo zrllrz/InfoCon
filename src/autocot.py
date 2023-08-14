@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from module.module_util import FreqEncoder
+from module.module_util import FreqEncoder, TimeSphereEncoder, mereNLL
 from module.VQ import VQClassifierNN, VQClassifier, VQNeighbor, VQNeighbor2, VQElastic, VQNeighborBasic
 from module.GPT import KeyNet, RecNet, ImplicitSAGPT, ExplicitSAGPT, ExplicitSAHNGPT, ActCommitNet, ENet, MLP
 from module.ResNetFC import ImplicitSAResFC, ExplicitSAHN
@@ -148,6 +148,8 @@ class AutoCoT(pl.LightningModule):
         rec_config,
         sa_config,
         vq_n_e=10,
+        vq_use_ema=True,
+        vq_coe_ema=0.95,
         KT=2.0,
         optimizers_config=None,
         scheduler_config=None,
@@ -155,6 +157,8 @@ class AutoCoT(pl.LightningModule):
         action_dim=-1,
         key_dim=-1,
         e_dim=-1,
+        use_st=True,
+        rate_st=2.0,
         te_keys_dim=None,
         coe_lip_pos=1.0,
         coe_lip_neg=0.5
@@ -172,16 +176,21 @@ class AutoCoT(pl.LightningModule):
             config=key_config,
             state_dim=state_dim,
             action_dim=action_dim,
-            key_dim=key_dim
+            key_dim=key_dim,
         )
 
-        if te_keys_dim is not None:
-            assert type(te_keys_dim) == int
-            self.ks_t_emb = FreqEncoder(length=te_keys_dim)
-            tek_dim = te_keys_dim
+        self.use_st = use_st
+        if use_st:
+            self.ks_t_emb = TimeSphereEncoder(rate=rate_st)
+            tek_dim = 1
         else:
-            self.ks_t_emb = None
-            tek_dim = 0
+            if te_keys_dim is not None:
+                assert type(te_keys_dim) == int
+                self.ks_t_emb = FreqEncoder(length=te_keys_dim)
+                tek_dim = te_keys_dim * 2
+            else:
+                self.ks_t_emb = None
+                tek_dim = 0
 
         self.rec_net = RecNet(
             config=rec_config,
@@ -262,6 +271,8 @@ class AutoCoT(pl.LightningModule):
             n_e=vq_n_e,
             e_dim=e_dim * sa_config.n_state_layer if (sa_config.type == 'hn' or sa_config.type == 'egpthn') else e_dim,
             KT=KT,
+            use_ema=vq_use_ema,
+            coe_ema=vq_coe_ema
         )
 
         # When training, we need to adjust the goal function part in sa_net
@@ -278,8 +289,12 @@ class AutoCoT(pl.LightningModule):
         self.LIP_POS = coe_lip_pos
         self.LIP_NEG = coe_lip_neg
 
-        self.coe_cluster = optimizers_config['coe_cluster']
-        self.coe_rec = optimizers_config['coe_rec']
+        if optimizers_config is not None:
+            self.coe_cluster = optimizers_config['coe_cluster']
+            self.coe_rec = optimizers_config['coe_rec']
+        else:
+            self.coe_cluster = 0.0
+            self.coe_rec = 0.0
 
         self.step = 0
 
@@ -297,7 +312,6 @@ class AutoCoT(pl.LightningModule):
             self.flag_cluster = True
         else:
             self.flag_cluster = False
-
 
     def statistic_indices(self, indices, unified_t=None):
         # (B, T)
@@ -338,7 +352,6 @@ class AutoCoT(pl.LightningModule):
         print('in autocot method: loss_reward: should not reach here!')
         assert False
 
-
     def training_step(self, batch, batch_idx):
         # separate optimzing whole net and the embedding space
         self.step += 1
@@ -353,7 +366,10 @@ class AutoCoT(pl.LightningModule):
         # first forward, use policy and implicit energy to adjust key_soft, key_book #
         ##############################################################################
         key_soft, state_trans = self.key_net(states, timesteps, actions)
-        if self.ks_t_emb is not None:
+        if self.use_st:
+            # use time sphere embedding
+            key_soft = self.ks_t_emb(F.normalize(key_soft, p=2.0, dim=-1), unified_t)
+        elif self.ks_t_emb is not None:
             key_soft_te = self.ks_t_emb(unified_t)  # (B, T, te_keys_dim)
             key_soft = torch.cat([key_soft, key_soft_te], dim=-1)  # (B, T, key_dim + te_keys_dim)
         state_recs_from_keys = self.rec_net(key_soft, timesteps)
@@ -363,20 +379,24 @@ class AutoCoT(pl.LightningModule):
         # loss: state reconstruction
         l_s_recs, _ = get_loss(state_recs_from_keys, states, lengths)
 
-        encoding_indices, v_global, _, vparams_hard, score_vpss_1, score_vpsh_1, score_kss_1, _ \
+        encoding_indices, v_global, _, vparams_hard, w_max, score_vpss_1, score_vpsh_1, score_kss_1, _ \
             = self.key_book(key_soft)
+
+        l_label_cluster = torch.neg(torch.log(w_max)).mean()
 
         # loose time step regularization
         # closer time step, closer key_soft feature
         # need sigmoid? need log?
-        skss_rl = torch.log(F.sigmoid(score_kss_1[:, :, 1:])) - torch.log(F.sigmoid(score_kss_1[:, :, :-1]))
-        skss_rl = torch.maximum(skss_rl + 1e-12, torch.zeros_like(skss_rl))
-        skss_rl = skss_rl[:, :-1, :] * self.cm[self.cycle_key_soft].unsqueeze(0)
-        skss_ud = torch.log(F.sigmoid(score_kss_1[:, :-1, :])) - torch.log(F.sigmoid(score_kss_1[:, 1:, :]))
-        skss_ud = torch.maximum(skss_ud + 1e-12, torch.zeros_like(skss_ud))
-        skss_ud = skss_ud[:, :, 1:] * self.cm[self.cycle_key_soft].unsqueeze(0)
-        loss_key_soft_adj = skss_rl.mean() + skss_ud.mean()
+        # skss_rl = torch.log(F.sigmoid(score_kss_1[:, :, 1:])) - torch.log(F.sigmoid(score_kss_1[:, :, :-1]))
+        # skss_rl = torch.maximum(skss_rl + 1e-12, torch.zeros_like(skss_rl))
+        # skss_rl = skss_rl[:, :-1, :] * self.cm[self.cycle_key_soft].unsqueeze(0)
+        # skss_ud = torch.log(F.sigmoid(score_kss_1[:, :-1, :])) - torch.log(F.sigmoid(score_kss_1[:, 1:, :]))
+        # skss_ud = torch.maximum(skss_ud + 1e-12, torch.zeros_like(skss_ud))
+        # skss_ud = skss_ud[:, :, 1:] * self.cm[self.cycle_key_soft].unsqueeze(0)
+        # loss_key_soft_adj = skss_rl.mean() + skss_ud.mean()
         self.cycle_key_soft = ((self.cycle_key_soft + 1) % 2)
+
+        loss_key_soft_adj = 0.0
 
         if self.sa_type == 'hn':
             # currently hyper net implementation only have
@@ -414,7 +434,8 @@ class AutoCoT(pl.LightningModule):
                 l_policy = \
                     l_policy \
                     + self.coe_cluster * (
-                        torch.neg(torch.log(1.0 - reward)).mean()
+                        l_label_cluster
+                        + torch.neg(torch.log(1.0 - reward)).mean()
                         + torch.neg(torch.log(1.0 - reward_i)).mean()
                     )
 
@@ -489,13 +510,14 @@ class AutoCoT(pl.LightningModule):
                 '?s': l_s_preds,
                 '?a': l_a_preds,
                 'regks': loss_key_soft_adj,
+                '©l': l_label_cluster,
                 '©': l_cluster,
                 '©ss': log_logit_contrast_ss,
                 '©sh': log_logit_contrast_sh,
             }, prog_bar=True, on_step=True, on_epoch=True
         )
 
-    def label_single(self, states, timesteps, actions=None):
+    def label_single(self, states, timesteps, unified_t, actions=None):
         # states: (T, s_dim)
         # actions: None or (T - 1, a_dim)
         # timesteps
@@ -507,6 +529,10 @@ class AutoCoT(pl.LightningModule):
 
         # key_net label
         key_soft, _ = self.key_net(states, timesteps, actions)
+        if self.ks_t_emb is not None:
+            key_soft_te = self.ks_t_emb(unified_t)  # (B, T, te_keys_dim)
+            key_soft = torch.cat([key_soft, key_soft_te], dim=-1)  # (B, T, key_dim + te_keys_dim)
+
         label = self.key_book.get_key_soft_indices(key_soft)
         return label[:, -1]
 

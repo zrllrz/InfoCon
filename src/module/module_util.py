@@ -5,6 +5,7 @@ https://github.com/ashawkey/stable-dreamfusion
 
 import torch
 import torch.nn as nn
+from math import log
 
 
 class FreqEncoder(nn.Module):
@@ -17,11 +18,41 @@ class FreqEncoder(nn.Module):
         self.register_buffer('coe_freq', coe_freq.unsqueeze(0))
 
     def forward(self, unified_t):
-        u_t = torch.sub(torch.mul(unified_t, 2.0), 1.0).unsqueeze(-1)
+        u_t = torch.mul(torch.sub(torch.mul(unified_t, 2.0), 1.0), torch.pi).unsqueeze(-1)
         emb_cos = torch.cos(u_t @ self.coe_freq)
         emb_sin = torch.sin(u_t @ self.coe_freq)
-        emb_t = torch.cat([u_t, emb_cos, emb_sin, u_t], dim=-1)
+        emb_t = torch.cat([emb_cos, emb_sin], dim=-1)
         return emb_t
+
+
+class TimeSphereEncoder(nn.Module):
+    def __init__(self, rate):
+        super().__init__()
+        self.rate = rate * 2.0
+
+    def forward(self, feature, unified_t):
+        # feature: (..., d)
+        # unified_t: (...)
+        u_t = torch.mul(torch.sub(torch.mul(unified_t, 2.0), 1.0), torch.pi).unsqueeze(-1)  # (..., 1)
+        u_t_sin = torch.sin(torch.div(u_t, self.rate))  # (..., 1)
+        u_t_cos = torch.cos(torch.div(u_t, self.rate))  # (..., 1)
+        f_cos = u_t_cos * feature  # (..., d)
+        f_t = torch.cat([u_t_sin, f_cos], dim=-1)
+        return f_t
+
+
+class mereNLL(nn.Module):
+    def __init__(self, eps=0.1):
+        super().__init__()
+        self.eps = eps
+        self.one_minus_eps = 1.0 - eps
+        self.log_one_minus_eps = log(1.0 - eps)
+
+    def forward(self, x):
+        one_minus_eps_mul_x = x * self.one_minus_eps
+        coe = self.eps + one_minus_eps_mul_x
+        v_log = coe * torch.log(torch.div(coe, one_minus_eps_mul_x))
+        return v_log + self.log_one_minus_eps
 
 
 class MLP(nn.Module):

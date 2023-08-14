@@ -216,9 +216,9 @@ class KeyNet(nn.Module):
 
         key_soft = self.key_predictor(x[:, 0:(2*T):2, :])
         # only reconstruct s1, s2, ..., s(T-1)
-        state_recs = self.state_predictor(x[:, 1:(2*T-2):2, :])
+        state_trans = self.state_predictor(x[:, 1:(2*T-2):2, :])
 
-        return key_soft, state_recs
+        return key_soft, state_trans
 
 
 class ImplicitSAGPT(nn.Module):

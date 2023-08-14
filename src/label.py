@@ -28,7 +28,7 @@ from path import MODEL_PATH, DATA_PATH
 
 
 @torch.no_grad()
-def predict(model, action_hist, state_hist, t):
+def predict(model, action_hist, state_hist, unified_t_hist, t):
     timesteps = torch.from_numpy(t)[:, None].to(model.device)
 
     if not action_hist:  # The first step.
@@ -36,12 +36,15 @@ def predict(model, action_hist, state_hist, t):
     else:
         actions = torch.stack(action_hist, 1).float().to(model.device)
     states = torch.stack(state_hist, 1).float().to(model.device)
+    unified_t = torch.stack(unified_t_hist, 1).float().to(model.device)
+    # print(states.shape)
+    # print(unified_t.squeeze(2).shape)
 
     # print('shape of states:', states.shape)
     # print('shape of timesteps', timesteps.shape)
 
     # use the label_single method in AutoCoT
-    indices = model.label_single(states, timesteps, actions)
+    indices = model.label_single(states, timesteps, unified_t.squeeze(2), actions)
 
     return indices
 
@@ -328,7 +331,8 @@ if __name__ == "__main__":
             block_size=params['context_length'],
             n_layer=params['n_action_layer'],
             n_state_layer=params['n_state_layer'],
-            max_timestep=max_timestep
+            max_timestep=max_timestep,
+            use_skip=params['use_skip']
         )
     elif params['sa_type'] == 'hn':
         sa_config = ExplicitSAHNConfig(
@@ -343,8 +347,6 @@ if __name__ == "__main__":
         print('Unknown sa_type')
         assert False
 
-
-
     print(params['vq_n_e'])
     autocot_model = AutoCoT(
         key_config=key_config,
@@ -357,7 +359,8 @@ if __name__ == "__main__":
         state_dim=state_dim,
         action_dim=action_dim,
         key_dim=key_dim,
-        e_dim=e_dim
+        e_dim=e_dim,
+        te_keys_dim=None if (params['te_key_dim'] == 0) else params['te_key_dim']
     )
 
     autocot_model = autocot_model.cuda()
@@ -367,10 +370,13 @@ if __name__ == "__main__":
     for i_traj in range(length):
         traj_state = dataset['obs'][i_traj]
         traj_action = dataset['actions'][i_traj]
+        unified_t = torch.div(torch.arange(len(traj_state)), float(len(traj_state)))
+        unified_t = unified_t.unsqueeze(-1)
         key_states_gt = key_states_gts[i_traj]
 
         t = np.zeros(shape=[1], dtype=np.int64)
         state_hist, action_hist = [torch.from_numpy(traj_state[:1]).float()], [torch.from_numpy(traj_action[:1]).float()]
+        unified_t_hist = [unified_t[:1]]
 
         current_label = -1
         i_begin = 0
@@ -381,6 +387,7 @@ if __name__ == "__main__":
                 model=autocot_model,
                 action_hist=action_hist,
                 state_hist=state_hist,
+                unified_t_hist=unified_t_hist,
                 t=t,
             )
             # print(indices.item(), traj_label[step])
@@ -403,10 +410,13 @@ if __name__ == "__main__":
                 assert len(action_hist) == (autocot_model.key_net.block_size // 2)
                 state_hist = state_hist[1:] + [torch.from_numpy(traj_state[step + 1:step + 2]).float()]
                 action_hist = action_hist[1:] + [torch.from_numpy(traj_action[step: step + 1]).float()]
+                unified_t_hist = unified_t_hist[1:] + [unified_t[step + 1: step + 2]]
                 t += 1
             else:
                 state_hist.append(torch.from_numpy(traj_state[step + 1:step + 2]).float())
                 action_hist.append(torch.from_numpy(traj_action[step: step + 1]).float())
+                unified_t_hist.append(unified_t[step + 1: step + 2])
+
         if current_label != -1:
             print(f'key {current_label}\t[{i_begin}, {traj_action.shape[0] - 1}]', end='')
             for i_gt in range(len(key_states_gt)):

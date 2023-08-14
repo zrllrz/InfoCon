@@ -60,6 +60,10 @@ def parse_args():
     #                     help="Number of attention layers in RecNet")
     parser.add_argument("--n_key_layer", default=4, type=int,
                         help="Number of attention layers in KeyNet")
+    parser.add_argument("--use_ts", action='store_true',
+                        help="Use time sphere embedding for soft keys")
+    parser.add_argument("--rate_ts", default='2.0', type=str,
+                        help="division rate for time sphere embedding")
     parser.add_argument("--te_key_dim", default=128, type=int,
                         help="Number of attention layers in KeyNet")
     parser.add_argument("--n_rec_layer", default=4, type=int,
@@ -67,6 +71,10 @@ def parse_args():
 
     parser.add_argument('--vq_n_e', type=int, default=100,
                         help="How many kinds of keys in the key_book")
+    parser.add_argument('--vq_use_ema', action='store_true',
+                        help="use ema moving to update keys")
+    parser.add_argument('--vq_coe_ema', type=str, default='0.95',
+                        help="ema moving rate")
     parser.add_argument('--KT', type=str, default='1.0',
                         help="Temperature for classifier")
     parser.add_argument('--coe_lip', type=str, default='2.0',
@@ -141,13 +149,13 @@ if __name__ == "__main__":
         + 'k' + str(args.n_key_layer) \
         + '-r' + str(args.n_rec_layer) \
         + '-c' + str(args.vq_n_e) \
-        + '_KT' + args.KT + '_LIP' + args.coe_lip \
+        + '_KT' + args.KT + '_EMA' + args.vq_coe_ema + '_LIP' + args.coe_lip \
         + '-' + args.sa_type + '_s' + str(args.n_state_layer) + '_a' + str(args.n_action_layer) \
         + '-emb' + str(args.n_embd) \
         + '-key' + str(args.dim_key) \
         + '-e' + str(args.dim_e) \
         + '-cluster' + args.coe_cluster + '-rec' + args.coe_rec \
-        + '-te_key_dim' + str(args.te_key_dim)
+        + (('-ts' + args.rate_ts) if args.use_ts else ('-te_key_dim' + str(args.te_key_dim)))
 
     # + '-ss' + args.c_ss + '-sh' + args.c_sh + '-hs' + args.c_hs + '-hh' + args.c_hh \
 
@@ -285,6 +293,8 @@ if __name__ == "__main__":
         sa_config=sa_config,
         rec_config=rec_config,
         vq_n_e=args.vq_n_e,
+        vq_use_ema=args.vq_use_ema,
+        vq_coe_ema=float(args.vq_coe_ema),
         KT=float(args.KT),
         optimizers_config=optimizer_config,
         scheduler_config=scheduler_config,
