@@ -8,8 +8,8 @@ https://github.com/haosulab/ManiSkill2/blob/main/mani_skill2/envs/misc/turn_fauc
 Moroever, replace the `_get_obs_extra` function to customize the state representation
 so that it is easier to distinguish among different faucet models.
 
-Note: 
-The 10 faucet models (a simpler subset of all faucets in ManiSkill2) we use in the 
+Note:
+The 10 faucet models (a simpler subset of all faucets in ManiSkill2) we use in the
 CoTPC paper have the ids: 5002,5021,5023,5028,5029,5045,5047,5051,5056,5063.
 """
 
@@ -37,6 +37,6 @@ def evaluate(self, **kwargs):
     is_contacted = any(self.agent.check_contact_fingers(self.target_link))
     angle_dist = self.target_angle - self.current_angle
     return dict(
-        success=angle_dist < 0, 
+        success=angle_dist < 0,
         angle_dist=angle_dist,
         is_contacted=is_contacted)

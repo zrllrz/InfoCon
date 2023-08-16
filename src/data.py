@@ -99,7 +99,7 @@ class MS2Demos(Dataset):
             't': np.array([s_idx]).astype(np.float32),
             'unified_t': np.arange(start=s_idx, stop=e_idx, step=1.0, dtype=np.float32) / l
             # 'env_states': self.data['env_states'][index][s_idx:e_idx].astype(np.float32),
-        }     
+        }
         if self.with_key_states:
             if f'key_states_{index}' not in self.idx_to_key_states:
                 self.idx_to_key_states[f'key_states_{index}'], self.idx_to_key_states_label[f'key_states_{index}'] \

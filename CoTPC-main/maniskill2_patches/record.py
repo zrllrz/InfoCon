@@ -6,10 +6,10 @@ function in (with the correct level of indentation):
 https://github.com/haosulab/ManiSkill2/blob/main/mani_skill2/utils/wrappers/record.py
 """
 
-def flush_trajectory(self, **args):
 
+def flush_trajectory(self, **args):
     # some code here ...
-    
+
     ########################### ADDED CODE #############################
     # Append info (boolean flags) to the recorded trajectories.
     # This tells you what info to store in the trajs.

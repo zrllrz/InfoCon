@@ -16,9 +16,7 @@ from autocot import (
     ExplicitSAGPTConfig,
     ExplicitSAHNGPTConfig,
     ExplicitSAHNConfig,
-    ActCommitNetConfig,
     RecNetConfig,
-    ENetConfig,
     AutoCoT
 )
 from lr_scheduler import CosineAnnealingLRWarmup
@@ -60,39 +58,21 @@ def parse_args():
     #                     help="Number of attention layers in RecNet")
     parser.add_argument("--n_key_layer", default=4, type=int,
                         help="Number of attention layers in KeyNet")
-    parser.add_argument("--use_ts", action='store_true',
-                        help="Use time sphere embedding for soft keys")
-    parser.add_argument("--rate_ts", default='2.0', type=str,
-                        help="division rate for time sphere embedding")
-    parser.add_argument("--te_key_dim", default=128, type=int,
-                        help="Number of attention layers in KeyNet")
+
     parser.add_argument("--n_rec_layer", default=4, type=int,
                         help="Number of attention layers in RecNet")
 
     parser.add_argument('--vq_n_e', type=int, default=100,
                         help="How many kinds of keys in the key_book")
-    parser.add_argument('--vq_use_ema', action='store_true',
-                        help="use ema moving to update keys")
     parser.add_argument('--vq_coe_ema', type=str, default='0.95',
                         help="ema moving rate")
     parser.add_argument('--KT', type=str, default='1.0',
                         help="Temperature for classifier")
-    parser.add_argument('--coe_lip', type=str, default='2.0',
-                        help="Lip Constant")
+    parser.add_argument("--vq_t_emb_rate", default='1.2', type=str,
+                        help="division rate for time sphere embedding")
+
     parser.add_argument("--coe_cluster", default='0.1', type=str, help="cluster weight")
     parser.add_argument("--coe_rec", default='1.0', type=str, help="reconstruction weight from key_soft")
-    # parser.add_argument('--repulse', action='store_true',
-    #                     help="weight of clustering (classifier) loss")
-    # parser.add_argument('--c_ss', type=str, default='1.0',
-    #                     help="weight of clustering soft-soft loss")
-    # parser.add_argument('--c_sh', type=str, default='0.01',
-    #                     help="weight of clustering soft-hard loss")
-    # parser.add_argument('--c_hs', type=str, default='0.1',
-    #                     help="weight of clustering hard-soft loss")
-    # parser.add_argument('--c_hh', type=str, default='0.001',
-    #                     help="weight of clustering hard-hard loss")
-    # parser.add_argument('--vq_decay_energy', type=str, default='0.1', help="decay coe for energy calc")
-    # parser.add_argument('--vq_coe_structure', type=str, default='0.1', help="Coefficient in the VQ loss")
 
     parser.add_argument("--sa_type", default='gpt', type=str, choices=['gpt', 'egpt', 'egpthn', 'resfc', 'hn'],
                         help="type of sa_net")
@@ -149,13 +129,12 @@ if __name__ == "__main__":
         + 'k' + str(args.n_key_layer) \
         + '-r' + str(args.n_rec_layer) \
         + '-c' + str(args.vq_n_e) \
-        + '_KT' + args.KT + '_EMA' + args.vq_coe_ema + '_LIP' + args.coe_lip \
+        + '_KT' + args.KT + '_EMA' + args.vq_coe_ema + '_temb' + args.vq_t_emb_rate \
         + '-' + args.sa_type + '_s' + str(args.n_state_layer) + '_a' + str(args.n_action_layer) \
         + '-emb' + str(args.n_embd) \
         + '-key' + str(args.dim_key) \
         + '-e' + str(args.dim_e) \
         + '-cluster' + args.coe_cluster + '-rec' + args.coe_rec \
-        + (('-ts' + args.rate_ts) if args.use_ts else ('-te_key_dim' + str(args.te_key_dim)))
 
     # + '-ss' + args.c_ss + '-sh' + args.c_sh + '-hs' + args.c_hs + '-hh' + args.c_hh \
 
@@ -293,7 +272,6 @@ if __name__ == "__main__":
         sa_config=sa_config,
         rec_config=rec_config,
         vq_n_e=args.vq_n_e,
-        vq_use_ema=args.vq_use_ema,
         vq_coe_ema=float(args.vq_coe_ema),
         KT=float(args.KT),
         optimizers_config=optimizer_config,
@@ -302,9 +280,7 @@ if __name__ == "__main__":
         action_dim=action_dim,
         key_dim=args.dim_key,
         e_dim=args.dim_e,
-        use_st=args.use_ts,
-        rate_st=float(args.rate_ts),
-        te_keys_dim=None if (args.te_key_dim == 0) else args.te_key_dim
+        vq_t_emb_rate=float(args.vq_t_emb_rate),
     )
 
     # autocot_model.configure_optimizers()

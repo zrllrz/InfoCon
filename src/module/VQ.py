@@ -11,7 +11,182 @@ import torch.nn.functional as F
 from torch.autograd import Function
 from einops import rearrange
 
-from module_util import MLP
+from module_util import MLP, TimeSphereEncoder
+
+
+class VQClassifierNNTime(nn.Module):
+    def __init__(self, key_dim, n_e, e_dim, e_split, KT=0.1, use_ema=False, coe_ema=0.5, t_emb_rate=1.2):
+        super().__init__()
+        self.key_dim = key_dim
+        self.n_e = n_e
+        self.e_dim = e_dim
+        self.e_split = e_split  # for later HN, how many segment do we have, we normalize vparams below based on e_split
+        self.KT = KT
+
+        self.sm = nn.Softmax(dim=-1)
+
+        self.keys = nn.Embedding(n_e, key_dim)
+        self.keys.weight.data.uniform_(-1.0 / n_e, 1.0 / n_e)
+
+        # control time area of prototype
+        self.t_keys = nn.Embedding(n_e, 1)
+        self.t_keys.weight.data.uniform_(-1.0, 1.0)
+
+        arange = torch.arange(n_e, dtype=torch.float32)
+
+        # along with scaler that transform them into different time area
+        t_base = torch.div(arange, n_e)
+        self.register_buffer('t_base', t_base.unsqueeze(-1))
+        self.t_emb = TimeSphereEncoder(rate=t_emb_rate)
+
+        # parameters
+        self.vparams = nn.Embedding(n_e, e_dim)
+        self.vparams.weight.data.uniform_(-1.0 / n_e, 1.0 / n_e)
+
+        self.use_ema = use_ema
+        self.coe_ema = coe_ema
+
+        self.register_buffer('arange', arange)
+        self.register_buffer('not_same', 1.0 - torch.eye(n_e))
+
+    def get_keys(self):
+        # for the reason that our keys and its time embedding is separated
+        # we provide a method that transform this easily
+        keys_norm = F.normalize(self.keys.weight, p=2.0, dim=-1)
+        u_t = self.t_base + torch.div(F.sigmoid(self.t_keys.weight), self.n_e)  # (n_e, 1)
+        keys_norm_t_emb = self.t_emb(keys_norm, u_t.squeeze(-1))
+        return keys_norm_t_emb
+
+    def split_vparams_norm(self, vparams):
+        # (..., vparams), this part, the vparams may be weighed vparams (vparams_w)
+        # so we need a params here...
+        vparams_norm = []
+        for i in range(self.e_split):
+            i_begin = i * (self.e_dim // self.e_split)
+            i_end = (i + 1) * (self.e_dim // self.e_split)
+            vparams_norm.append(F.normalize(vparams[..., i_begin:i_end], p=2.0, dim=-1))
+        vparams_norm = torch.cat(vparams_norm, dim=-1)
+        return vparams_norm
+
+    def score_to_weight(self, score):
+        # score (..., n_e)
+        weight = self.sm(torch.div(score, self.KT))  # (..., n_e)
+        weight = torch.nan_to_num(weight)
+        return weight
+
+    def get_time_emb_keys(self, keys, u_t):
+        # keys: (..., key_dim)
+        # u_t: (...)
+        keys = keys.contiguous()
+        keys_norm = F.normalize(keys, p=2.0, dim=-1)
+        keys_norm_t_emb = self.t_emb(feature=keys_norm, unified_t=u_t)  # key_soft: (..., key_dim + 1)
+        return keys_norm_t_emb
+
+    def get_key_soft_indices(self, key_soft, u_t):
+        # key_soft: (B, T, key_dim)
+        # choosing indices does not need gradient
+        with torch.no_grad():
+            key_soft = key_soft.contiguous()
+            B, T = key_soft.shape[0], key_soft.shape[1]
+            key_soft_norm = F.normalize(key_soft, p=2.0, dim=-1)
+            key_soft_t_emb = self.t_emb(feature=key_soft_norm, unified_t=u_t)  # key_soft: (B, T, key_dim + 1)
+            key_soft_flattened = key_soft_t_emb.view(B*T, self.key_dim + 1)  # (B*T, key_dim + 1)
+
+            # construct usage keys in the codebook (time + feature)
+            keys_norm = self.get_keys()  # (n_e, key_dim + 1)
+            score_ksh_flattened = torch.einsum('bd,dn->bn', key_soft_flattened,
+                                               rearrange(keys_norm, 'n d -> d n'))  # (B*T, n_e)
+            # use the nearest key
+            encoding_indices = torch.argmax(score_ksh_flattened, dim=1)  # (B*T)
+            encoding_indices = encoding_indices.view(B, T)
+
+            return encoding_indices
+
+    def ema_forward(self, key_soft, u_t):
+        # key_soft shape (B, T, self.key_dim)
+        key_soft = key_soft.contiguous()
+        B, T = key_soft.shape[0], key_soft.shape[1]
+
+        # first construct key_soft with timestep embedding
+        key_soft_norm = F.normalize(key_soft, p=2.0, dim=-1)  # (B, T, key_dim)
+        key_soft_t_emb = self.t_emb(feature=key_soft_norm, unified_t=u_t)  # (B, T, key_dim + 1)
+        key_soft_flattened = key_soft_t_emb.view(B*T, self.key_dim + 1)  # (B*T, key_dim + 1)
+
+        # construct usage keys in the codebook (time + feature)
+        keys_norm = self.get_keys()  # (n_e, key_dim + 1)
+        keys_norm = keys_norm.detach()  # update of ema do not need gradient
+
+        # calc score_ksh
+        score_ksh_flattened = torch.einsum('bd,dn->bn', key_soft_flattened,
+                                           rearrange(keys_norm, 'n d -> d n'))  # (B*T, n_e)
+
+        # Neareset Neighbor for indices and hard vparams
+        encoding_indices_flattened = torch.argmax(score_ksh_flattened, dim=1)  # (B*T)
+        encoding_indices = encoding_indices_flattened.view(B, T)  # (B, T)
+
+        # EMA update of keys behind
+        with torch.no_grad():
+            u_t_flattened = u_t.view(-1)  # (B*T)
+            time_low_mask = \
+                torch.greater_equal(u_t_flattened.view(1, -1).repeat(self.n_e, 1), self.t_base)
+            time_high_mask = \
+                torch.less(u_t_flattened.view(1, -1).repeat(self.n_e, 1), torch.add(self.t_base, 1.0 / self.n_e))
+            time_mask = torch.logical_and(time_low_mask, time_high_mask)  # (n_e, B*T)
+
+            sum_mask = torch.eq(self.arange.view(-1, 1).repeat(1, B * T),
+                                encoding_indices_flattened.view(1, -1).repeat(self.n_e, 1))
+            sum_mask = torch.logical_or(sum_mask, time_mask)
+            sum_mask = sum_mask.to(dtype=torch.float32)
+
+            cnt = torch.sum(sum_mask, dim=-1, keepdim=True)  # (n_e, 1)
+            mean_key_soft = torch.div(sum_mask @ key_soft_flattened, cnt)  # (n_e, key_dim + 1)
+            mean_key_soft = torch.nan_to_num(mean_key_soft)  # (n_e, key_dim + 1)
+            keys_norm_new = F.normalize(keys_norm * self.coe_ema + mean_key_soft * (1.0 - self.coe_ema),
+                                        p=2.0, dim=-1)  # (n_e, key_dim + 1)
+            t_keys_new, _, keys_new = self.t_emb.split_t_f(keys_norm_new)
+            t_keys_new = torch.mul(t_keys_new - self.t_base.squeeze(-1), self.n_e)
+            t_keys_new = torch.logit(t_keys_new, eps=1e-6)
+            self.t_keys.weight.data = t_keys_new.unsqueeze(1)
+            self.keys.weight.data = keys_new
+
+        # re-calculate score_ksh...
+        # calc score_ksh
+        keys_norm = self.get_keys()  # (n_e, key_dim + 1)
+        keys_norm = keys_norm.detach()  # update of ema do not need gradient
+        score_ksh_flattened = torch.einsum('bd,dn->bn', key_soft_flattened,
+                                           rearrange(keys_norm, 'n d -> d n'))  # (B*T, n_e)
+        score_ksh = score_ksh_flattened.view(B, T, self.n_e)  # (B, T, n_e)
+        # transmit into weight
+        w_flattened = self.score_to_weight(score_ksh_flattened)  # (B*T, n_e)
+
+        # choose out prototype prob for each soft key (after update...)
+        w_max_flattened = torch.gather(w_flattened, dim=-1, index=encoding_indices_flattened.unsqueeze(-1)).squeeze(-1)
+        w_max = w_max_flattened.view(B, T)
+
+        # to weighted params
+        vparams_norm = self.split_vparams_norm(self.vparams.weight)  # (n_e, e_dim)
+        vparams_w_flattened = w_flattened.view(B * T, 1, self.n_e) @ vparams_norm.view(1, self.n_e, self.e_dim).detach()
+        vparams_w_flattened = vparams_w_flattened.squeeze(1)  # (B*T, e_dim)
+        vparams_w_flattened = self.split_vparams_norm(vparams_w_flattened)  # (B*T, e_dim)
+        vparams_w = vparams_w_flattened.view(B, T, self.e_dim)  # (B, T, e_dim)
+        vparams_w = vparams_w.contiguous()  # (B, T, e_dim)
+
+        vparams_hard = self.vparams(encoding_indices).view(B, T, self.e_dim)  # (B, T, e_dim)
+        vparams_hard = self.split_vparams_norm(vparams_hard)  # normalization (B, T, e_dim)
+        vparams_hard = vparams_hard.contiguous()
+        vparams_hard = vparams_w + (vparams_hard - vparams_w).detach()  # store gradient
+
+        v_global = torch.max(encoding_indices) - torch.min(encoding_indices)
+
+        return \
+            encoding_indices, v_global, \
+            vparams_w, vparams_hard, w_max, score_ksh, key_soft_t_emb
+
+    def forward(self, key_soft, u_t):
+        # key_soft shape (B, T, self.key_dim)
+        assert self.use_ema, 'should not reach here'
+        return self.ema_forward(key_soft, u_t)
+
 
 
 class VQClassifierNN(nn.Module):
@@ -58,7 +233,7 @@ class VQClassifierNN(nn.Module):
                 indices_flattened.view(1, -1).repeat(self.n_e, 1)
             )  # (n_e, L)
             sum_mask_float = sum_mask.to(dtype=torch.float32)
-            cnt = torch.sum(sum_mask_float, dim=-1)  # (n_e, 1)
+            cnt = torch.sum(sum_mask_float, dim=-1)  # (n_e)
             sum_losses = (sum_mask_float @ losses_flattened.unsqueeze(-1)).squeeze(-1)  # (n_e)
 
             # update loss_label (average of label loss)
@@ -79,41 +254,6 @@ class VQClassifierNN(nn.Module):
         self.n_label = torch.zeros_like(self.n_label)
         self.min_ut = torch.full_like(self.min_ut, fill_value=float('+inf'))
         self.max_ut = torch.full_like(self.min_ut, fill_value=float('-inf'))
-
-    def split_keys(self, func_te, loss_mean, tolerance=1.0):
-        with torch.no_grad():
-            loss_label_max, loss_label_i = torch.max(self.loss_label, dim=-1)
-            print('loss_label_max =', loss_label_max)
-            if loss_label_max > loss_mean * (1.0 + tolerance):
-                # try tp split loss_label_i
-                # first find a (Latest Recent) unused (LRU) index
-                ix = 0
-                for ix in range(self.n_e):
-                    if self.n_label[ix] == 0:
-                        break
-                loss_label_i_new = ix
-                print('loss_label_i_new', loss_label_i_new)
-                if loss_label_i_new >= self.n_e:
-                    print('No Index Left. Give up Splitting')
-                    return
-                # else split the keys[loss_label_i], one in keys[loss_label_i], one in keys[loss_label_i_new]
-                key_old = self.keys[loss_label_i]  # (key_dim)
-
-                # assert at autocot that you are using time-step spherical embedding
-                sin_t = key_old[0]
-                key_old_wote = torch.div(key_old[1:], torch.sqrt(1.0 - sin_t ** 2))
-                t_new_1, t_new_2 = \
-                    (self.min_ut[loss_label_i] * 2.0 + self.max_ut[loss_label_i]) / 3.0, \
-                    (self.min_ut[loss_label_i] + self.max_ut[loss_label_i] * 2.0) / 3.0,
-
-                # split into two new keys according to embedding of time
-                key_new_1 = key_old
-                key_new_2 = key_old
-
-                # update the keys
-                self.keys[loss_label_i] = key_new_1
-                self.keys[loss_label_i_new] = key_new_2
-
 
     def loss_dispersion(self):
         keys_norm = F.normalize(self.keys.weight, p=2.0, dim=-1)  # (n_e, key_dim)
@@ -143,6 +283,7 @@ class VQClassifierNN(nn.Module):
         weight = self.sm(torch.div(score, self.KT))  # (..., n_e)
         weight = torch.nan_to_num(weight)
         return weight
+
 
     def cos_sim(self, v_soft, mode='key'):
         if mode == 'key':

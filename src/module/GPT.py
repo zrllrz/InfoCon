@@ -422,7 +422,7 @@ class ExplicitSAGPT(nn.Module):
 
 
 class ExplicitSAHNGPT(nn.Module):
-    def __init__(self, config, state_dim=-1, action_dim=-1, key_dim=-1):
+    def __init__(self, config, state_dim=-1, action_dim=-1, key_dim=-1, KT=0.1):
         super().__init__()
 
         assert state_dim > 0 and action_dim > 0 and key_dim > 0
@@ -432,6 +432,7 @@ class ExplicitSAHNGPT(nn.Module):
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.key_dim = key_dim
+        self.KT = KT
         self.n_embd = config.n_embd
 
         self.block_size = config.block_size * 3
@@ -528,7 +529,7 @@ class ExplicitSAHNGPT(nn.Module):
         key_last = keys[..., (-self.key_dim):]  # (B, T, key_dim)
         mu_last = self.hn_out_1(key_last)  # (B, T, n_embd)
         cos_score = F.cosine_similarity(mu_last, x_hidden, dim=-1)  # (B, T)
-        r = F.sigmoid(cos_score)
+        r = F.sigmoid(torch.div(cos_score, self.KT))
 
         return r, v_r_norm
 

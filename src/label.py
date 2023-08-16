@@ -17,8 +17,6 @@ from autocot import (
     ExplicitSAHNGPTConfig,
     ImplicitSAResFCConfig,
     ExplicitSAHNConfig,
-    ENetConfig,
-    ActCommitNetConfig,
     AutoCoT
 )
 
@@ -47,20 +45,6 @@ def predict(model, action_hist, state_hist, unified_t_hist, t):
     indices = model.label_single(states, timesteps, unified_t.squeeze(2), actions)
 
     return indices
-
-
-# def update(model, action_hist, state_hist, actions, states, t):
-#     # A function used to update the state and action history.
-#     actions = torch.from_numpy(actions)
-#     if len(state_hist) == model.key_net.block_size // 2:  # The context buffer is full.
-#         assert len(action_hist) == model.key_net.block_size // 2 - 1
-#         state_hist = state_hist[1:] + [states]
-#         action_hist = action_hist[1:] + [actions]
-#         t += 1
-#     else:
-#         state_hist.append(states)
-#         action_hist.append(actions)
-#     return action_hist, state_hist, t
 
 
 def parse_args():
@@ -156,8 +140,7 @@ if __name__ == "__main__":
     # print(dataset['actions'][0].shape, type(dataset['actions'][0]))
 
     for k in traj_all['traj_0']['infos'].keys():
-        dataset[f'infos/{k}'] = [np.array(
-            traj_all[f"traj_{i}"]["infos"][k]) for i in ids]
+        dataset[f'infos/{k}'] = [np.array(traj_all[f"traj_{i}"]["infos"][k]) for i in ids]
         if k == 'info':  # For PushChair.
             for kk in traj_all['traj_0']['infos'][k].keys():
                 dataset[f'infos/demo_{kk}'] = [np.array(
@@ -256,18 +239,6 @@ if __name__ == "__main__":
         for i, ks in enumerate(ksgt):
             print(f'#{i}', ks[0], ks[1])
 
-    # config our net
-    # rec_config = RecNetConfig(
-    #     n_embd=params['n_embd'],
-    #     n_head=params['n_head'],
-    #     attn_pdrop=float(params['dropout']),
-    #     resid_pdrop=float(params['dropout']),
-    #     embd_pdrop=float(params['dropout']),
-    #     block_size=params['context_length'],
-    #     n_layer=params['n_key_layer'],
-    #     max_timestep=max_timestep,
-    # )
-
     key_config = KeyNetConfig(
         n_embd=params['n_embd'],
         n_head=params['n_head'],
@@ -354,7 +325,6 @@ if __name__ == "__main__":
         sa_config=sa_config,
         rec_config=rec_config,
         vq_n_e=params['vq_n_e'],
-        vq_use_ema=params['vq_use_ema'],
         vq_coe_ema=float(params['vq_coe_ema']),
         KT=float(params['KT']),
         optimizers_config=None,
@@ -363,9 +333,7 @@ if __name__ == "__main__":
         action_dim=action_dim,
         key_dim=key_dim,
         e_dim=e_dim,
-        use_st=params['use_ts'],
-        rate_st=float(params['rate_ts']),
-        te_keys_dim=None if (params['te_key_dim'] == 0) else params['te_key_dim']
+        vq_t_emb_rate=float(params['vq_t_emb_rate']),
     )
 
     autocot_model = autocot_model.cuda()
@@ -385,6 +353,8 @@ if __name__ == "__main__":
 
         current_label = -1
         i_begin = 0
+
+        key_state_step = list()
 
         for step in range(traj_action.shape[0] - 1):
             # print('step #', step, end=' ')
@@ -408,6 +378,7 @@ if __name__ == "__main__":
                     print()
                 current_label = indices_item
                 i_begin = step
+                key_state_step.append(step)
 
             # update...
             if len(state_hist) == autocot_model.key_net.block_size // 2:
@@ -428,4 +399,6 @@ if __name__ == "__main__":
                 if i_begin <= key_states_gt[i_gt][1] <= (traj_action.shape[0] - 1):
                     print(f'\tgt key states', key_states_gt[i_gt][1], key_states_gt[i_gt][0], end='')
             print()
+
+
         input()

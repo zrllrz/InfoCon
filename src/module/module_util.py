@@ -5,6 +5,7 @@ https://github.com/ashawkey/stable-dreamfusion
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from math import log
 
 
@@ -39,6 +40,31 @@ class TimeSphereEncoder(nn.Module):
         f_cos = u_t_cos * feature  # (..., d)
         f_t = torch.cat([u_t_sin, f_cos], dim=-1)
         return f_t
+
+    def split_t_f(self, f_embedded):
+        # feature: (..., d + 1)
+        # always regard the first value of the last dim as the embedded time step
+        # transform it back to unified time and its feature
+        f_t = f_embedded[..., 0]
+
+        # unified time
+        t = torch.arcsin(f_t)
+        t = t * self.rate / torch.pi
+        t = (t + 1.0) / 2.0
+        t_logit = torch.logit(t, eps=1e-9)
+        # feature without timestep embeddings
+        f = torch.div(f_embedded[..., 1:], torch.sqrt(1.0 - f_t ** 2).unsqueeze(-1))
+        return t, t_logit, f
+
+    def feature_time(self, f_embedded):
+        # feature: (..., d + 1)
+        # always regard the first value of the last dim as the embedded time step
+        # transform it back to unified time
+        f_t = f_embedded[..., 0]
+        t = torch.arcsin(f_t)
+        t = t * self.rate / torch.pi
+        t = (t + 1.0) / 2.0
+        return t
 
 
 class mereNLL(nn.Module):

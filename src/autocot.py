@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from module.module_util import FreqEncoder, TimeSphereEncoder, mereNLL
-from module.VQ import VQClassifierNN, VQClassifier, VQNeighbor, VQNeighbor2, VQElastic, VQNeighborBasic
+from module.VQ import VQClassifierNNTime, VQClassifierNN, VQClassifier, VQNeighbor, VQNeighbor2, VQElastic, VQNeighborBasic
 from module.GPT import KeyNet, RecNet, ImplicitSAGPT, ExplicitSAGPT, ExplicitSAHNGPT, ActCommitNet, ENet, MLP
 from module.ResNetFC import ImplicitSAResFC, ExplicitSAHN
 
@@ -148,7 +148,6 @@ class AutoCoT(pl.LightningModule):
         rec_config,
         sa_config,
         vq_n_e=10,
-        vq_use_ema=True,
         vq_coe_ema=0.95,
         KT=2.0,
         optimizers_config=None,
@@ -157,12 +156,7 @@ class AutoCoT(pl.LightningModule):
         action_dim=-1,
         key_dim=-1,
         e_dim=-1,
-        use_st=True,
-        rate_st=2.0,
-        te_keys_dim=None,
-        coe_lip_pos=1.0,
-        coe_lip_neg=0.5,
-        vq_fresh_step=1000,
+        vq_t_emb_rate=2.0,
     ):
         super().__init__()
 
@@ -180,86 +174,81 @@ class AutoCoT(pl.LightningModule):
             key_dim=key_dim,
         )
 
-        self.use_st = use_st
-        if use_st:
-            self.ks_t_emb = TimeSphereEncoder(rate=rate_st)
-            tek_dim = 1
-            self.vq_fresh_step = vq_fresh_step
-        else:
-            self.vq_fresh_step = None  # You Cannot use refresh and splitting key hards when using
-            if te_keys_dim is not None:
-                assert type(te_keys_dim) == int
-                self.ks_t_emb = FreqEncoder(length=te_keys_dim)
-                tek_dim = te_keys_dim * 2
-            else:
-                self.ks_t_emb = None
-                tek_dim = 0
-
         self.rec_net = RecNet(
             config=rec_config,
             state_dim=state_dim,
-            key_dim=key_dim+tek_dim
+            key_dim=key_dim+1
         )
 
-        print('block size =', key_config.block_size)
-        block_size = key_config.block_size
+        # print('block size =', key_config.block_size)
+        # block_size = key_config.block_size
 
-        # mask for key soft time-steps constraint
-        check_mask_base = 1 - torch.tril(torch.ones(block_size, block_size))
-        check_mask_sum = torch.cumsum(check_mask_base, dim=-1)
-        check_mask_0 = ((check_mask_sum % 2 == 1) * check_mask_base).to(dtype=torch.float32)
-        check_mask_1 = ((check_mask_sum % 2 == 0) * check_mask_base).to(dtype=torch.float32)
-        check_mask_0 = check_mask_0[:-1, 1:]
-        check_mask_1 = check_mask_1[:-1, 1:]
-        print('check_mask_0 =\n', check_mask_0)
-        print('check_mask_1 =\n', check_mask_1)
-        self.register_buffer('cm', torch.stack([check_mask_0, check_mask_1], dim=0))
+        # # mask for key soft time-steps constraint
+        # check_mask_base = 1 - torch.tril(torch.ones(block_size, block_size))
+        # check_mask_sum = torch.cumsum(check_mask_base, dim=-1)
+        # check_mask_0 = ((check_mask_sum % 2 == 1) * check_mask_base).to(dtype=torch.float32)
+        # check_mask_1 = ((check_mask_sum % 2 == 0) * check_mask_base).to(dtype=torch.float32)
+        # check_mask_0 = check_mask_0[:-1, 1:]
+        # check_mask_1 = check_mask_1[:-1, 1:]
+        # print('check_mask_0 =\n', check_mask_0)
+        # print('check_mask_1 =\n', check_mask_1)
+        # self.register_buffer('cm', torch.stack([check_mask_0, check_mask_1], dim=0))
 
         # mask for clustering between key_soft
-        arange = torch.arange(block_size, dtype=torch.float32)
-        hm_dis = torch.abs(arange.view(-1, 1) - arange)
-        hm_dis = torch.neg(hm_dis - torch.ones_like(hm_dis))
-        hm_dis[[i for i in range(block_size)], [i for i in range(block_size)]] = float('-inf')
-        w_ss = torch.pow(2.0, hm_dis * (vq_n_e - 2) / (block_size - 2))
-        print('w_ss =\n', w_ss)
-        self.register_buffer('w_ss', w_ss)
+        # arange = torch.arange(block_size, dtype=torch.float32)
+        # hm_dis = torch.abs(arange.view(-1, 1) - arange)
+        # hm_dis = torch.neg(hm_dis - torch.ones_like(hm_dis))
+        # hm_dis[[i for i in range(block_size)], [i for i in range(block_size)]] = float('-inf')
+        # w_ss = torch.pow(2.0, hm_dis * (vq_n_e - 2) / (block_size - 2))
+        # print('w_ss =\n', w_ss)
+        # self.register_buffer('w_ss', w_ss)
 
         # sa_net, for action, next_state prediction to eval the hard key
+
         self.sa_type = sa_config.type
         if sa_config.type == 'resfc':
-            self.sa_net = ImplicitSAResFC(
-                config=sa_config,
-                state_dim=state_dim,
-                action_dim=action_dim,
-                key_dim=e_dim
-            )
+            print('do not use it')
+            assert False
+            # self.sa_net = ImplicitSAResFC(
+            #     config=sa_config,
+            #     state_dim=state_dim,
+            #     action_dim=action_dim,
+            #     key_dim=e_dim
+            # )
         elif sa_config.type == 'gpt':
-            self.sa_net = ImplicitSAGPT(
-                config=sa_config,
-                state_dim=state_dim,
-                action_dim=action_dim,
-                key_dim=e_dim
-            )
+            print('do not use it')
+            assert False
+            # self.sa_net = ImplicitSAGPT(
+            #     config=sa_config,
+            #     state_dim=state_dim,
+            #     action_dim=action_dim,
+            #     key_dim=e_dim
+            # )
         elif sa_config.type == 'hn':
-            self.sa_net = ExplicitSAHN(
-                config=sa_config,
-                state_dim=state_dim,
-                action_dim=action_dim,
-                e_dim=e_dim * sa_config.reward_layer
-            )
+            print('do not use it')
+            assert False
+            # self.sa_net = ExplicitSAHN(
+            #     config=sa_config,
+            #     state_dim=state_dim,
+            #     action_dim=action_dim,
+            #     e_dim=e_dim * sa_config.reward_layer
+            # )
         elif sa_config.type == 'egpt':
-            self.sa_net = ExplicitSAGPT(
-                config=sa_config,
-                state_dim=state_dim,
-                action_dim=action_dim,
-                key_dim=e_dim
-            )
+            print('do not use it')
+            assert False
+            # self.sa_net = ExplicitSAGPT(
+            #     config=sa_config,
+            #     state_dim=state_dim,
+            #     action_dim=action_dim,
+            #     key_dim=e_dim
+            # )
         elif sa_config.type == 'egpthn':
             self.sa_net = ExplicitSAHNGPT(
                 config=sa_config,
                 state_dim=state_dim,
                 action_dim=action_dim,
-                key_dim=e_dim
+                key_dim=e_dim,
+                KT=KT,
             )
         else:
             print('unknown sa_config.type')
@@ -268,13 +257,15 @@ class AutoCoT(pl.LightningModule):
         # key_book, use for vq mapping
         # every soft key will be mapped to a hard key in the book using a restrict nearest neighbour
         # which will make sure the indices are close...
-        self.key_book = VQClassifierNN(
-            key_dim=key_dim+tek_dim,
+        self.key_book = VQClassifierNNTime(
+            key_dim=key_dim,
             n_e=vq_n_e,
             e_dim=e_dim * sa_config.n_state_layer if (sa_config.type == 'hn' or sa_config.type == 'egpthn') else e_dim,
+            e_split=sa_config.n_state_layer,
             KT=KT,
-            use_ema=vq_use_ema,
-            coe_ema=vq_coe_ema
+            use_ema=True,
+            coe_ema=vq_coe_ema,
+            t_emb_rate=vq_t_emb_rate
         )
 
         # When training, we need to adjust the goal function part in sa_net
@@ -288,9 +279,6 @@ class AutoCoT(pl.LightningModule):
         self.vq_turn = 0  # start from 0, circle movement, update the first meet index
                           # which some states are classified to during this iter
 
-        self.LIP_POS = coe_lip_pos
-        self.LIP_NEG = coe_lip_neg
-
         if optimizers_config is not None:
             self.coe_cluster = optimizers_config['coe_cluster']
             self.coe_rec = optimizers_config['coe_rec']
@@ -298,10 +286,7 @@ class AutoCoT(pl.LightningModule):
             self.coe_cluster = 0.0
             self.coe_rec = 0.0
 
-        self.step_refresh = 0
-        self.ls_a_pred_mean = 0.0
-        self.cnt_a_pred_mean = 0
-
+        self.step = 0
         self.step_cluster = 0
         self.cyc_cluster = 1
         self.flag_cluster = False
@@ -310,21 +295,12 @@ class AutoCoT(pl.LightningModule):
         self.automatic_optimization = False
 
     def on_train_batch_start(self, batch, batch_idx):
-        self.step_refresh += 1
         self.step_cluster += 1
         if self.step_cluster == self.cyc_cluster:
             self.step_cluster = 0
             self.flag_cluster = True
         else:
             self.flag_cluster = False
-
-        if self.step_refresh == self.vq_fresh_step:
-            # refresh key_book, do splitting
-            self.split_keys(self.ls_a_pred_mean, tolerance=1.0)
-            self.key_book.refresh_loss_label()
-            self.step_refresh = 0
-            self.ls_a_pred_mean = 0.0
-            self.cnt_a_pred_mean = 0
 
     def split_keys(self, loss_mean, tolerance=1.0):
         with torch.no_grad():
@@ -374,6 +350,8 @@ class AutoCoT(pl.LightningModule):
                     table[i, j] = ((indices == j).to(torch.int) * mask_t).sum()
             torch.set_printoptions(precision=8, sci_mode=False)
             print(table)
+            print(torch.div(F.sigmoid(self.key_book.t_keys.weight.data), self.key_book.n_e).squeeze(-1)
+                  + self.key_book.t_base.squeeze(-1))
 
     def loss_reward(self, states, indices):
         # indices (B, T) choice of index of this batch
@@ -411,24 +389,19 @@ class AutoCoT(pl.LightningModule):
         # first forward, use policy and implicit energy to adjust key_soft, key_book #
         ##############################################################################
         key_soft, state_trans = self.key_net(states, timesteps, actions)
-        if self.use_st:
-            # use time sphere embedding
-            key_soft = self.ks_t_emb(F.normalize(key_soft, p=2.0, dim=-1), unified_t)
-        elif self.ks_t_emb is not None:
-            key_soft_te = self.ks_t_emb(unified_t)  # (B, T, te_keys_dim)
-            key_soft = torch.cat([key_soft, key_soft_te], dim=-1)  # (B, T, key_dim + te_keys_dim)
-        state_recs_from_keys = self.rec_net(key_soft, timesteps)
+        encoding_indices, v_global, vparams_w, vparams_hard, w_max, score_ksh, key_soft_t_emb = \
+            self.key_book(key_soft, unified_t)
+
+        state_recs_from_keys = self.rec_net(key_soft_t_emb, timesteps)
 
         # loss: state transmission
         l_s_trans, _ = get_loss(state_trans, states[:, 1:, ...], lengths - 1)
         # loss: state reconstruction
         l_s_recs, _ = get_loss(state_recs_from_keys, states, lengths)
-
-        encoding_indices, v_global, _, vparams_hard, w_max, score_vpss_1, score_vpsh_1, score_kss_1, _ \
-            = self.key_book(key_soft)
-
+        # loss: clustering behind
         l_label_cluster = torch.neg(torch.log(w_max)).mean()
-        loss_key_soft_adj = 0.0
+
+        # loss_key_soft_adj = 0.0
 
         if self.sa_type == 'hn':
             # currently hyper net implementation only have
@@ -442,7 +415,7 @@ class AutoCoT(pl.LightningModule):
             #######
             # ??? #
             #######
-            l_policy = l_a_preds + l_s_trans + self.coe_rec * (l_s_recs + loss_key_soft_adj)
+            l_policy = l_a_preds + l_s_trans + self.coe_rec * l_s_recs
 
         elif self.sa_type == 'egpt' or self.sa_type == 'egpthn':
             action_preds, reward, v_r_norm = self.sa_net(states, timesteps, actions=actions, keys=vparams_hard)
@@ -451,14 +424,8 @@ class AutoCoT(pl.LightningModule):
             l_s_preds = 0.0
             l_a_preds, ls_a_preds = get_loss(action_preds, actions, lengths)
 
-            self.ls_a_pred_mean = (self.ls_a_pred_mean * float(self.cnt_a_pred_mean) + l_a_preds) / float(self.cnt_a_pred_mean + 1)
-            self.cnt_a_pred_mean += 1
-
-            # update label action prediction losses
-            self.key_book.update_loss_label(losses=ls_a_preds, unified_t=unified_t, indices=encoding_indices)
-
             # need some regulation on the explicit reward (ascent reward, large at switching point)
-            l_policy = l_a_preds + l_s_trans + self.coe_rec * (l_s_recs + loss_key_soft_adj)
+            l_policy = l_a_preds + l_s_trans + self.coe_rec * l_s_recs
             if self.flag_cluster:
                 # reward is the prob of completion
                 # (1.0 - reward) is the prob of un-completion
@@ -466,7 +433,6 @@ class AutoCoT(pl.LightningModule):
                 # minimize -log(1.0 - reward)
                 # also we need to update one set of classifier during onr iteration
 
-                # Two direction Lip Constraint
                 reward_i = self.loss_reward(states, indices=encoding_indices)
 
                 l_policy = \
@@ -483,7 +449,7 @@ class AutoCoT(pl.LightningModule):
             # loss: state prediction & action prediction
             l_s_preds, _ = get_loss(state_preds[:, :-1, ...], states[:, 1:, ...], lengths - 1)
             l_a_preds, _ = get_loss(action_preds, actions, lengths)
-            l_policy = l_s_preds + l_a_preds + l_s_trans + self.coe_rec * (l_s_recs + loss_key_soft_adj)
+            l_policy = l_s_preds + l_a_preds + l_s_trans + self.coe_rec * l_s_recs
 
         opt_policy.zero_grad()
         self.manual_backward(l_policy)
@@ -499,47 +465,48 @@ class AutoCoT(pl.LightningModule):
         ###################################################
         if (self.sa_type != 'egpt' and self.sa_type != 'egpthn') and self.flag_cluster:
             print('！@#¥%……&*（')
-            key_soft, _ = self.key_net(states, timesteps, actions)
-
-            encoding_indices, v_global, _, _, score_vpss_2, score_vpsh_2, score_kss_2, score_ksh_2 \
-                = self.key_book(key_soft)
-
-            pn_change_ss = torch.where(torch.less(score_vpss_1, score_vpss_2), 0.0, 1.0)
-            pn_change_sh = torch.where(torch.less(score_vpsh_1, score_vpsh_2), 0.0, 1.0)
-
-            logit_vpss = torch.neg(torch.log(F.sigmoid(score_vpss_2)))  # (B, T, T)
-            logit_vpsh = torch.neg(torch.log(F.sigmoid(score_vpsh_2)))  # (B, T, n_e)
-            logit_kss = torch.neg(torch.log(F.sigmoid(score_kss_2)))  # (B, T, T)
-            logit_ksh = torch.neg(torch.log(F.sigmoid(score_ksh_2)))  # (B, T, n_e)
-
-            logit_contrast_ss = torch.abs(logit_vpss - logit_kss) - self.LIP  # (B, T, T)
-            logit_contrast_sh = torch.abs(logit_vpsh - logit_ksh) - self.LIP  # (B, T, n_e)
-
-            logit_contrast_ss = logit_contrast_ss * pn_change_ss * self.w_ss
-            logit_contrast_sh = logit_contrast_sh * pn_change_sh
-
-            logit_contrast_ss = torch.maximum(logit_contrast_ss, torch.zeros_like(logit_contrast_ss))
-            logit_contrast_sh = torch.maximum(logit_contrast_sh, torch.zeros_like(logit_contrast_sh))
-
-            log_logit_contrast_ss = logit_contrast_ss.mean()
-            log_logit_contrast_sh = logit_contrast_sh.mean()
-
-            l_cluster = torch.cat([logit_contrast_ss, logit_contrast_sh, logit_contrast_sh], dim=-1)
-            l_cluster = torch.mean(l_cluster, dim=2)
-            l_cluster = torch.mean(l_cluster, dim=1)
-            l_cluster = torch.mean(l_cluster, dim=0)
-
-            opt_cluster.zero_grad()
-            self.manual_backward(l_cluster)
-            opt_cluster.step()
-            sch_cluster.step()  # dont forget schedulers !!!!
-
-        else:
-            l_cluster = 0.0
-            log_logit_contrast_ss = 0.0
-            log_logit_contrast_sh = 0.0
+            assert False
+            # key_soft, _ = self.key_net(states, timesteps, actions)
+            #
+            # encoding_indices, v_global, _, _, score_vpss_2, score_vpsh_2, score_kss_2, score_ksh_2 \
+            #     = self.key_book(key_soft)
+            #
+            # pn_change_ss = torch.where(torch.less(score_vpss_1, score_vpss_2), 0.0, 1.0)
+            # pn_change_sh = torch.where(torch.less(score_vpsh_1, score_vpsh_2), 0.0, 1.0)
+            #
+            # logit_vpss = torch.neg(torch.log(F.sigmoid(score_vpss_2)))  # (B, T, T)
+            # logit_vpsh = torch.neg(torch.log(F.sigmoid(score_vpsh_2)))  # (B, T, n_e)
+            # logit_kss = torch.neg(torch.log(F.sigmoid(score_kss_2)))  # (B, T, T)
+            # logit_ksh = torch.neg(torch.log(F.sigmoid(score_ksh_2)))  # (B, T, n_e)
+            #
+            # logit_contrast_ss = torch.abs(logit_vpss - logit_kss) - self.LIP  # (B, T, T)
+            # logit_contrast_sh = torch.abs(logit_vpsh - logit_ksh) - self.LIP  # (B, T, n_e)
+            #
+            # logit_contrast_ss = logit_contrast_ss * pn_change_ss * self.w_ss
+            # logit_contrast_sh = logit_contrast_sh * pn_change_sh
+            #
+            # logit_contrast_ss = torch.maximum(logit_contrast_ss, torch.zeros_like(logit_contrast_ss))
+            # logit_contrast_sh = torch.maximum(logit_contrast_sh, torch.zeros_like(logit_contrast_sh))
+            #
+            # log_logit_contrast_ss = logit_contrast_ss.mean()
+            # log_logit_contrast_sh = logit_contrast_sh.mean()
+            #
+            # l_cluster = torch.cat([logit_contrast_ss, logit_contrast_sh, logit_contrast_sh], dim=-1)
+            # l_cluster = torch.mean(l_cluster, dim=2)
+            # l_cluster = torch.mean(l_cluster, dim=1)
+            # l_cluster = torch.mean(l_cluster, dim=0)
+            #
+            # opt_cluster.zero_grad()
+            # self.manual_backward(l_cluster)
+            # opt_cluster.step()
+            # sch_cluster.step()  # dont forget schedulers !!!!
+        # else:
+        #     l_cluster = 0.0
+        #     log_logit_contrast_ss = 0.0
+        #     log_logit_contrast_sh = 0.0
 
         # log the loss-es
+
         self.log_dict(
             {
                 'vg': v_global,
@@ -547,11 +514,7 @@ class AutoCoT(pl.LightningModule):
                 'rs': l_s_recs,
                 '?s': l_s_preds,
                 '?a': l_a_preds,
-                'regks': loss_key_soft_adj,
                 '©l': l_label_cluster,
-                '©': l_cluster,
-                '©ss': log_logit_contrast_ss,
-                '©sh': log_logit_contrast_sh,
             }, prog_bar=True, on_step=True, on_epoch=True
         )
 
@@ -567,13 +530,7 @@ class AutoCoT(pl.LightningModule):
 
         # key_net label
         key_soft, _ = self.key_net(states, timesteps, actions)
-        if self.use_st:
-            # use time sphere embedding
-            key_soft = self.ks_t_emb(F.normalize(key_soft, p=2.0, dim=-1), unified_t)
-        elif self.ks_t_emb is not None:
-            key_soft_te = self.ks_t_emb(unified_t)  # (B, T, te_keys_dim)
-            key_soft = torch.cat([key_soft, key_soft_te], dim=-1)  # (B, T, key_dim + te_keys_dim)
-        label = self.key_book.get_key_soft_indices(key_soft)
+        label = self.key_book.get_key_soft_indices(key_soft, unified_t)
         return label[:, -1]
 
     def configure_optimizers(self):
