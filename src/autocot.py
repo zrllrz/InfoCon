@@ -161,7 +161,8 @@ class AutoCoT(pl.LightningModule):
         rate_st=2.0,
         te_keys_dim=None,
         coe_lip_pos=1.0,
-        coe_lip_neg=0.5
+        coe_lip_neg=0.5,
+        vq_fresh_step=1000,
     ):
         super().__init__()
 
@@ -183,7 +184,9 @@ class AutoCoT(pl.LightningModule):
         if use_st:
             self.ks_t_emb = TimeSphereEncoder(rate=rate_st)
             tek_dim = 1
+            self.vq_fresh_step = vq_fresh_step
         else:
+            self.vq_fresh_step = None  # You Cannot use refresh and splitting key hards when using
             if te_keys_dim is not None:
                 assert type(te_keys_dim) == int
                 self.ks_t_emb = FreqEncoder(length=te_keys_dim)
@@ -211,7 +214,6 @@ class AutoCoT(pl.LightningModule):
         print('check_mask_0 =\n', check_mask_0)
         print('check_mask_1 =\n', check_mask_1)
         self.register_buffer('cm', torch.stack([check_mask_0, check_mask_1], dim=0))
-        self.cycle_key_soft = 0
 
         # mask for clustering between key_soft
         arange = torch.arange(block_size, dtype=torch.float32)
@@ -296,7 +298,9 @@ class AutoCoT(pl.LightningModule):
             self.coe_cluster = 0.0
             self.coe_rec = 0.0
 
-        self.step = 0
+        self.step_refresh = 0
+        self.ls_a_pred_mean = 0.0
+        self.cnt_a_pred_mean = 0
 
         self.step_cluster = 0
         self.cyc_cluster = 1
@@ -306,12 +310,52 @@ class AutoCoT(pl.LightningModule):
         self.automatic_optimization = False
 
     def on_train_batch_start(self, batch, batch_idx):
+        self.step_refresh += 1
         self.step_cluster += 1
         if self.step_cluster == self.cyc_cluster:
             self.step_cluster = 0
             self.flag_cluster = True
         else:
             self.flag_cluster = False
+
+        if self.step_refresh == self.vq_fresh_step:
+            # refresh key_book, do splitting
+            self.split_keys(self.ls_a_pred_mean, tolerance=1.0)
+            self.key_book.refresh_loss_label()
+            self.step_refresh = 0
+            self.ls_a_pred_mean = 0.0
+            self.cnt_a_pred_mean = 0
+
+    def split_keys(self, loss_mean, tolerance=1.0):
+        with torch.no_grad():
+            loss_label_max, loss_label_i = torch.max(self.key_book.loss_label, dim=-1)
+            print('loss_label_max =', loss_label_max)
+            if loss_label_max > loss_mean * (1.0 + tolerance):
+                # try tp split loss_label_i
+                # first find a (Latest Recent) unused (LRU) index
+                ix = 0
+                for ix in range(self.key_book.n_e):
+                    if self.key_book.n_label[ix] == 0:
+                        break
+                loss_label_i_new = ix
+                print('loss_label_i_new', loss_label_i_new)
+                if loss_label_i_new >= self.key_book.n_e:
+                    print('No Index Left. Give up Splitting')
+                    return
+                # else split the keys[loss_label_i], one in keys[loss_label_i], one in keys[loss_label_i_new]
+                key_old = self.key_book.keys[loss_label_i]  # (key_dim)
+
+                # assert at autocot that you are using time-step spherical embedding
+                sin_t = key_old[0]
+                key_old_wote = torch.div(key_old[1:], torch.sqrt(1.0 - sin_t ** 2) + 1e-9)
+                # split into two new keys according to embedding of time
+                key_new_1, key_new_2 = \
+                    self.ks_t_emb(key_old_wote, (self.key_book.min_ut[loss_label_i] * 2.0 + self.key_book.max_ut[loss_label_i]) / 3.0), \
+                    self.ks_t_emb(key_old_wote, (self.key_book.min_ut[loss_label_i] + self.key_book.max_ut[loss_label_i] * 2.0) / 3.0)
+
+                # update the keys
+                self.key_book.keys[loss_label_i] = key_new_1
+                self.key_book.keys[loss_label_i_new] = key_new_2
 
     def statistic_indices(self, indices, unified_t=None):
         # (B, T)
@@ -343,6 +387,7 @@ class AutoCoT(pl.LightningModule):
             if n_i != 0:
                 # update the reward function of this part
                 key_same_i = self.key_book.vparams(torch.tensor([[self.vq_turn]], device=states.device))
+                key_same_i = F.normalize(key_same_i, p=2.0, dim=-1)
                 key_same_i = key_same_i.repeat(B, T, 1)
                 reward_i, _ = self.sa_net.get_reward(states, key_same_i)
                 reward_i = torch.where(mask_i, reward_i, 1.0 - reward_i)  # other should be different
@@ -383,19 +428,6 @@ class AutoCoT(pl.LightningModule):
             = self.key_book(key_soft)
 
         l_label_cluster = torch.neg(torch.log(w_max)).mean()
-
-        # loose time step regularization
-        # closer time step, closer key_soft feature
-        # need sigmoid? need log?
-        # skss_rl = torch.log(F.sigmoid(score_kss_1[:, :, 1:])) - torch.log(F.sigmoid(score_kss_1[:, :, :-1]))
-        # skss_rl = torch.maximum(skss_rl + 1e-12, torch.zeros_like(skss_rl))
-        # skss_rl = skss_rl[:, :-1, :] * self.cm[self.cycle_key_soft].unsqueeze(0)
-        # skss_ud = torch.log(F.sigmoid(score_kss_1[:, :-1, :])) - torch.log(F.sigmoid(score_kss_1[:, 1:, :]))
-        # skss_ud = torch.maximum(skss_ud + 1e-12, torch.zeros_like(skss_ud))
-        # skss_ud = skss_ud[:, :, 1:] * self.cm[self.cycle_key_soft].unsqueeze(0)
-        # loss_key_soft_adj = skss_rl.mean() + skss_ud.mean()
-        self.cycle_key_soft = ((self.cycle_key_soft + 1) % 2)
-
         loss_key_soft_adj = 0.0
 
         if self.sa_type == 'hn':
@@ -417,7 +449,13 @@ class AutoCoT(pl.LightningModule):
 
             # loss: state prediction & action prediction
             l_s_preds = 0.0
-            l_a_preds, _ = get_loss(action_preds, actions, lengths)
+            l_a_preds, ls_a_preds = get_loss(action_preds, actions, lengths)
+
+            self.ls_a_pred_mean = (self.ls_a_pred_mean * float(self.cnt_a_pred_mean) + l_a_preds) / float(self.cnt_a_pred_mean + 1)
+            self.cnt_a_pred_mean += 1
+
+            # update label action prediction losses
+            self.key_book.update_loss_label(losses=ls_a_preds, unified_t=unified_t, indices=encoding_indices)
 
             # need some regulation on the explicit reward (ascent reward, large at switching point)
             l_policy = l_a_preds + l_s_trans + self.coe_rec * (l_s_recs + loss_key_soft_adj)
@@ -529,10 +567,12 @@ class AutoCoT(pl.LightningModule):
 
         # key_net label
         key_soft, _ = self.key_net(states, timesteps, actions)
-        if self.ks_t_emb is not None:
+        if self.use_st:
+            # use time sphere embedding
+            key_soft = self.ks_t_emb(F.normalize(key_soft, p=2.0, dim=-1), unified_t)
+        elif self.ks_t_emb is not None:
             key_soft_te = self.ks_t_emb(unified_t)  # (B, T, te_keys_dim)
             key_soft = torch.cat([key_soft, key_soft_te], dim=-1)  # (B, T, key_dim + te_keys_dim)
-
         label = self.key_book.get_key_soft_indices(key_soft)
         return label[:, -1]
 

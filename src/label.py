@@ -83,6 +83,7 @@ def parse_args():
 
     return parser.parse_args()
 
+
 if __name__ == "__main__":
 
     args = parse_args()
@@ -353,6 +354,8 @@ if __name__ == "__main__":
         sa_config=sa_config,
         rec_config=rec_config,
         vq_n_e=params['vq_n_e'],
+        vq_use_ema=params['vq_use_ema'],
+        vq_coe_ema=float(params['vq_coe_ema']),
         KT=float(params['KT']),
         optimizers_config=None,
         scheduler_config=None,
@@ -360,6 +363,8 @@ if __name__ == "__main__":
         action_dim=action_dim,
         key_dim=key_dim,
         e_dim=e_dim,
+        use_st=params['use_ts'],
+        rate_st=float(params['rate_ts']),
         te_keys_dim=None if (params['te_key_dim'] == 0) else params['te_key_dim']
     )
 

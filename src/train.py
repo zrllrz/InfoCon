@@ -302,6 +302,8 @@ if __name__ == "__main__":
         action_dim=action_dim,
         key_dim=args.dim_key,
         e_dim=args.dim_e,
+        use_st=args.use_ts,
+        rate_st=float(args.rate_ts),
         te_keys_dim=None if (args.te_key_dim == 0) else args.te_key_dim
     )
 

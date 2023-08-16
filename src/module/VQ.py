@@ -37,6 +37,84 @@ class VQClassifierNN(nn.Module):
         self.register_buffer('arange', arange)
         self.register_buffer('not_same', 1.0 - torch.eye(n_e))
 
+        self.loss_label = torch.zeros(size=(n_e,), dtype=torch.float32)
+        self.n_label = torch.zeros(size=(n_e,), dtype=torch.float32)
+        self.min_ut = torch.full(size=(n_e,), fill_value=float('+inf'))
+        self.max_ut = torch.full(size=(n_e,), fill_value=float('-inf'))
+
+    def update_loss_label(self, losses, unified_t, indices):
+        # losses (...), loss at each step
+        # unified_t (...), unified time at each step
+        # indices (...), alonging indices
+        # always flattened
+        with torch.no_grad():
+            losses_flattened = losses.view(-1)  # (L)
+            ut_flattened = unified_t.view(-1)  # (L)
+            indices_flattened = indices.view(-1)  # (L)
+            L = losses_flattened.shape[0]
+
+            sum_mask = torch.eq(
+                self.arange.view(-1, 1).repeat(1, L),
+                indices_flattened.view(1, -1).repeat(self.n_e, 1)
+            )  # (n_e, L)
+            sum_mask_float = sum_mask.to(dtype=torch.float32)
+            cnt = torch.sum(sum_mask_float, dim=-1)  # (n_e, 1)
+            sum_losses = (sum_mask_float @ losses_flattened.unsqueeze(-1)).squeeze(-1)  # (n_e)
+
+            # update loss_label (average of label loss)
+            self.loss_label = (self.loss_label * self.n_label + sum_losses) / (self.n_label + cnt)
+            self.n_label += cnt
+
+            # update min_ut and max_ut
+            max_ut = torch.where(sum_mask, ut_flattened.view(1, -1).repeat(self.n_e, 1), float('-inf'))
+            min_ut = torch.where(sum_mask, ut_flattened.view(1, -1).repeat(self.n_e, 1), float('+inf'))
+            max_ut = torch.max(max_ut, dim=-1)[0]  # (n_e)
+            min_ut = torch.min(min_ut, dim=-1)[0]  # (n_e)
+            self.max_ut = torch.where(torch.greater(max_ut, self.max_ut), max_ut, self.max_ut)
+            self.min_ut = torch.where(torch.less(min_ut, self.min_ut), min_ut, self.min_ut)
+
+    def refresh_loss_label(self):
+        # clean loss_label and n_label
+        self.loss_label = torch.zeros_like(self.loss_label)
+        self.n_label = torch.zeros_like(self.n_label)
+        self.min_ut = torch.full_like(self.min_ut, fill_value=float('+inf'))
+        self.max_ut = torch.full_like(self.min_ut, fill_value=float('-inf'))
+
+    def split_keys(self, func_te, loss_mean, tolerance=1.0):
+        with torch.no_grad():
+            loss_label_max, loss_label_i = torch.max(self.loss_label, dim=-1)
+            print('loss_label_max =', loss_label_max)
+            if loss_label_max > loss_mean * (1.0 + tolerance):
+                # try tp split loss_label_i
+                # first find a (Latest Recent) unused (LRU) index
+                ix = 0
+                for ix in range(self.n_e):
+                    if self.n_label[ix] == 0:
+                        break
+                loss_label_i_new = ix
+                print('loss_label_i_new', loss_label_i_new)
+                if loss_label_i_new >= self.n_e:
+                    print('No Index Left. Give up Splitting')
+                    return
+                # else split the keys[loss_label_i], one in keys[loss_label_i], one in keys[loss_label_i_new]
+                key_old = self.keys[loss_label_i]  # (key_dim)
+
+                # assert at autocot that you are using time-step spherical embedding
+                sin_t = key_old[0]
+                key_old_wote = torch.div(key_old[1:], torch.sqrt(1.0 - sin_t ** 2))
+                t_new_1, t_new_2 = \
+                    (self.min_ut[loss_label_i] * 2.0 + self.max_ut[loss_label_i]) / 3.0, \
+                    (self.min_ut[loss_label_i] + self.max_ut[loss_label_i] * 2.0) / 3.0,
+
+                # split into two new keys according to embedding of time
+                key_new_1 = key_old
+                key_new_2 = key_old
+
+                # update the keys
+                self.keys[loss_label_i] = key_new_1
+                self.keys[loss_label_i_new] = key_new_2
+
+
     def loss_dispersion(self):
         keys_norm = F.normalize(self.keys.weight, p=2.0, dim=-1)  # (n_e, key_dim)
         l_dispersion_k = torch.einsum('bd,dn->bn', keys_norm,
@@ -275,6 +353,8 @@ class VQClassifierNN(nn.Module):
         # key_soft shape (B, T, self.key_dim)
         if self.use_ema:
             return self.ema_forward(key_soft)
+
+        print('should not reach here')
 
         key_soft = key_soft.contiguous()
         B, T = key_soft.shape[0], key_soft.shape[1]
