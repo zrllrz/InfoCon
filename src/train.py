@@ -155,6 +155,7 @@ if __name__ == "__main__":
         with_key_states=True,
         task=args.task, multiplier=args.multiplier)
     print('Training data size:', len(train_dataset))
+    print('Training epoch:', args.n_iters / (len(train_dataset) / args.batch_size))
     print('Max steps:', train_dataset.max_steps)
     collate_fn = get_padding_fn(['s', 'a', 't', 'unified_t', 'k'])
     train_data = DataLoader(
@@ -274,7 +275,7 @@ if __name__ == "__main__":
 
     if args.vq_use_clip_decrease_r:
         # calculate the bound
-        vq_bound_clip_decrease_r = (0.999 - 0.001) / args.n_iters
+        vq_bound_clip_decrease_r = (0.999 - 0.001) / (args.n_iters / (len(train_dataset) / args.batch_size))
     else:
         vq_bound_clip_decrease_r = None
 
@@ -293,7 +294,7 @@ if __name__ == "__main__":
         e_dim=args.dim_e,
         vq_t_emb_rate=float(args.vq_t_emb_rate),
         vq_coe_r_l1=float(args.vq_coe_r_l1),
-        vq_bound_clip_decrease_r=vq_bound_clip_decrease_r
+        vq_use_clip_decrease_r=args.vq_use_clip_decrease_r
     )
 
     # autocot_model.configure_optimizers()

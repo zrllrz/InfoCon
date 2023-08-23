@@ -158,7 +158,7 @@ class AutoCoT(pl.LightningModule):
         e_dim=-1,
         vq_t_emb_rate=2.0,
         vq_coe_r_l1=0.0,
-        vq_bound_clip_decrease_r=None
+        vq_use_clip_decrease_r=False
     ):
         super().__init__()
 
@@ -268,7 +268,7 @@ class AutoCoT(pl.LightningModule):
             use_ema=True,
             coe_ema=vq_coe_ema,
             t_emb_rate=vq_t_emb_rate,
-            bound_clip_decrease_r=vq_bound_clip_decrease_r
+            use_clip_decrease_r=vq_use_clip_decrease_r
         )
         self.vq_coe_r_l1 = vq_coe_r_l1
 
@@ -306,8 +306,10 @@ class AutoCoT(pl.LightningModule):
         return (0.5 + cos(self.progress_bar_step * pi) * 0.5) ** 2
 
     def on_train_batch_start(self, batch, batch_idx):
-        self.progress_bar_step = self.trainer.global_step / self.trainer.max_steps
-        self.key_book.reset_oor_r()
+        max_steps = self.trainer.max_steps
+        global_step = self.trainer.global_step
+        self.progress_bar_step = global_step / max_steps
+        self.key_book.reset_oor_r(left_step=(max_steps-global_step+1))
 
         self.step_cluster += 1
         if self.step_cluster == self.cyc_cluster:

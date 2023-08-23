@@ -36,7 +36,7 @@ increae_encourage_identity_map = increaseEncourageIdentityMap.apply
 
 class VQClassifierNNTime(nn.Module):
     def __init__(self, key_dim, n_e, e_dim, e_split, KT=0.1, use_ema=False, coe_ema=0.5, t_emb_rate=1.2,
-                 bound_clip_decrease_r=None):
+                 use_clip_decrease_r=False):
         super().__init__()
         self.key_dim = key_dim
         self.n_e = n_e
@@ -80,7 +80,7 @@ class VQClassifierNNTime(nn.Module):
         self.use_ema = use_ema
         self.coe_ema = coe_ema
 
-        self.bound_clip_decrease_r = bound_clip_decrease_r
+        self.use_clip_decrease_r = use_clip_decrease_r
         # None or a float point bound (how to calculate it will be defined in autocot model...)
 
         self.register_buffer('arange', arange)
@@ -102,15 +102,13 @@ class VQClassifierNNTime(nn.Module):
         # log the (PREVIOUS) r-s, BE CAREFUL when using it
         self.prev_r_keys.weight.data = self.get_r()
 
-    def reset_oor_r(self):
+    def reset_oor_r(self, left_step=10_000):
         with torch.no_grad():
             # First deal with the clipping
-            if self.bound_clip_decrease_r is not None:
-                m_decrease = \
-                    torch.greater(self.prev_r_keys.weight.data - self.r_keys.weight.data, self.bound_clip_decrease_r)
-                self.r_keys.weight.data = \
-                    torch.where(m_decrease,
-                                self.prev_r_keys.weight.data - self.bound_clip_decrease_r, self.r_keys.weight.data)
+            if self.use_clip_decrease_r:
+                key_decrease_bound = self.prev_r_keys.weight.data * (1.0 - 1.0 / left_step)
+                m_decrease = torch.greater(key_decrease_bound, self.r_keys.weight.data)
+                self.r_keys.weight.data = torch.where(m_decrease, key_decrease_bound, self.r_keys.weight.data)
 
             # then dealing with value out of range [0.001, 0.999]
             m_999 = torch.greater(self.r_keys.weight.data, 0.999)
