@@ -8,7 +8,7 @@ from mani_skill2.utils.io_utils import load_json
 import mani_skill2.envs  # Load ManiSkill2 envs.
 import torch  # Load pytorch after maniskill2 to avoid some import error.
 
-from model import GPTConfig, GPTWithCoT
+from model import GPTConfig, GPTWithCoT, code_book_len_to_key_state_mark
 
 from vec_env import get_mp_envs  # Used for parallel evaluation.
 
@@ -114,6 +114,23 @@ if __name__ == "__main__":
     max_timestep = state_dict_from_ckpt['global_pos_emb'].shape[1]
     print('Loaded ckpt from:', path)
 
+    if 'cot' in params['model_type']:
+        assert (params['vq_n_e'] != 0) or params['key_states'], 'Should specify --key_states.'
+        if params['vq_n_e'] != 0:
+            key_states_dict = \
+                code_book_len_to_key_state_mark(length=params['vq_n_e'],
+                                                key_state_loss_str=params['key_state_loss'])
+            args_key_states, args_key_state_loss = key_states_dict['key_states'], key_states_dict['key_state_loss']
+
+        else:
+            args_key_states, args_key_state_loss = params['key_states'], params['key_state_loss']
+    else:
+        args_key_states, args_key_state_loss = 'a', '0'
+    print(args_key_states, args_key_state_loss)
+
+
+
+
     # Load demos to fetch the env. seeds used in training.
     json_path = os.path.join(
         DATA_PATH, f'{args.task}/trajectory.{args.obs_mode}.{args.control_mode}.json')
@@ -156,8 +173,8 @@ if __name__ == "__main__":
         n_head=params['n_head'],
         n_embd=params['n_embd'],
         model_type=params['model_type'],
-        key_states=params['key_states'],  # Rules for the CoT.
-        key_state_loss=params['key_state_loss'],  # Layers used for CoT modeling.
+        key_states=args_key_states,  # Rules for the CoT.
+        key_state_loss=args_key_state_loss,  # Layers used for CoT modeling.
         cot_decoder=cot_decoder,
         max_timestep=max_timestep,
     )
@@ -186,6 +203,7 @@ if __name__ == "__main__":
             a = predict(model, action_hist, state_hist, t).cpu().numpy()
 
             s, _, _, infos = envs.step(a)
+            # print(infos[24])
             s = torch.from_numpy(s).float()
 
             action_hist, state_hist, t = update(
@@ -195,20 +213,20 @@ if __name__ == "__main__":
             for i, info in enumerate(infos):
                 j = start_idx + i
                 # You might want to use these additional metrics.
-                if args.task == 'PickCube-v0':
-                    metric_dict['is_grasped'][j].append(info['is_grasped'])
-                if args.task == 'StackCube-v0':
-                    metric_dict['is_cubaA_grasped'][j].append(info['is_cubaA_grasped'])
-                    metric_dict['is_cubeA_on_cubeB'][j].append(info['is_cubeA_on_cubeB'])
-                if args.task == 'PegInsertionSide-v0':
-                    metric_dict['is_grasped'][j].append(info['is_grasped'])
-                    metric_dict['pre_inserted'][j].append(info['pre_inserted'])
-                if args.task == 'TurnFaucet-v0':
-                    metric_dict['is_contacted'][j].append(info['is_contacted'])
-                if args.task == 'PushChair-v1':
-                    metric_dict['close_to_target'][j].append(info['chair_close_to_target'])
-                    metric_dict['static_at_last'][j].append(
-                        info['chair_close_to_target'] and info['chair_static'])
+                # if args.task == 'PickCube-v0':
+                #     metric_dict['is_grasped'][j].append(info['is_grasped'])
+                # if args.task == 'StackCube-v0':
+                #     metric_dict['is_cubaA_grasped'][j].append(info['is_cubaA_grasped'])
+                #     metric_dict['is_cubeA_on_cubeB'][j].append(info['is_cubeA_on_cubeB'])
+                # if args.task == 'PegInsertionSide-v0':
+                #     metric_dict['is_grasped'][j].append(info['is_grasped'])
+                #     metric_dict['pre_inserted'][j].append(info['pre_inserted'])
+                # if args.task == 'TurnFaucet-v0':
+                #     metric_dict['is_contacted'][j].append(info['is_contacted'])
+                # if args.task == 'PushChair-v1':
+                #     metric_dict['close_to_target'][j].append(info['chair_close_to_target'])
+                #     metric_dict['static_at_last'][j].append(
+                #         info['chair_close_to_target'] and info['chair_static'])
                 metric_dict['success'][j].append(info['success'])
 
     for k, v in metric_dict.items():
@@ -271,20 +289,20 @@ if __name__ == "__main__":
             for i, info in enumerate(infos):
                 j = start_idx + i
                 # You might want to use these additional metrics.
-                if args.task == 'PickCube-v0':
-                    metric_dict['test/is_grasped'][j].append(info['is_grasped'])
-                if args.task == 'StackCube-v0':
-                    metric_dict['test/is_cubaA_grasped'][j].append(info['is_cubaA_grasped'])
-                    metric_dict['test/is_cubeA_on_cubeB'][j].append(info['is_cubeA_on_cubeB'])
-                if args.task == 'PegInsertionSide-v0':
-                    metric_dict['test/is_grasped'][j].append(info['is_grasped'])
-                    metric_dict['test/pre_inserted'][j].append(info['pre_inserted'])
-                if args.task == 'TurnFaucet-v0':
-                    metric_dict['test/is_contacted'][j].append(info['is_contacted'])
-                if args.task == 'PushChair-v1':
-                    metric_dict['test/close_to_target'][j].append(info['chair_close_to_target'])
-                    metric_dict['test/static_at_last'][j].append(
-                        info['chair_close_to_target'] and info['chair_static'])
+                # if args.task == 'PickCube-v0':
+                #     metric_dict['test/is_grasped'][j].append(info['is_grasped'])
+                # if args.task == 'StackCube-v0':
+                #     metric_dict['test/is_cubaA_grasped'][j].append(info['is_cubaA_grasped'])
+                #     metric_dict['test/is_cubeA_on_cubeB'][j].append(info['is_cubeA_on_cubeB'])
+                # if args.task == 'PegInsertionSide-v0':
+                #     metric_dict['test/is_grasped'][j].append(info['is_grasped'])
+                #     metric_dict['test/pre_inserted'][j].append(info['pre_inserted'])
+                # if args.task == 'TurnFaucet-v0':
+                #     metric_dict['test/is_contacted'][j].append(info['is_contacted'])
+                # if args.task == 'PushChair-v1':
+                #     metric_dict['test/close_to_target'][j].append(info['chair_close_to_target'])
+                #     metric_dict['test/static_at_last'][j].append(
+                #         info['chair_close_to_target'] and info['chair_static'])
                 metric_dict['test/success'][j].append(info['success'])
 
     output_str = ''
@@ -332,12 +350,12 @@ if __name__ == "__main__":
             # Update metrics.
             for i, info in enumerate(infos):
                 j = start_idx + i
-                if args.task == 'PushChair-v1':
-                    metric_dict['test_h/close_to_target'][j].append(info['chair_close_to_target'])
-                    metric_dict['test_h/static_at_last'][j].append(
-                        info['chair_close_to_target'] and info['chair_static'])
-                if args.task == 'TurnFaucet-v0':
-                    metric_dict['test_h/is_contacted'][j].append(info['is_contacted'])
+                # if args.task == 'PushChair-v1':
+                #     metric_dict['test_h/close_to_target'][j].append(info['chair_close_to_target'])
+                #     metric_dict['test_h/static_at_last'][j].append(
+                #         info['chair_close_to_target'] and info['chair_static'])
+                # if args.task == 'TurnFaucet-v0':
+                #     metric_dict['test_h/is_contacted'][j].append(info['is_contacted'])
                 metric_dict['test_h/success'][j].append(info['success'])
 
     if all_reset_kwargs:

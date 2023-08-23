@@ -95,33 +95,35 @@ if __name__ == "__main__":
         DATA_PATH,
         f'{args.task}/trajectory.{args.obs_mode}.{args.control_mode}.h5'
     )
+    traj_save_keys_path = os.path.join(DATA_PATH, f'{args.task}')
     dataset = {}
     traj_all = h5py.File(traj_path)
     length = args.n_traj
     if length == -1:
         length = len(traj_all)
-    np.random.seed(args.seed)
-    # If you use the same seed, you can get same trajectory choice
-    # Since TurnFaucet uses 10 different faucet models, we shuffle the data
-    # such that the resulting sampled data are evenly sampled across faucet models.
-    if args.task == 'TurnFaucet-v0':
-        ids = []
-        for i in range(10):  # Hard-code the 10 data splits for permutation.
-            t_ids = np.random.permutation(len(traj_all) // 10)[:length // 10]
-            t_ids += i * len(traj_all) // 10
-            ids.append(t_ids)
-        ids = np.concatenate(ids)
-    # Since PushChair uses 5 different faucet models, we shuffle the data
-    # such that the resulting sampled data are evenly sampled across chair models.
-    elif args.task == 'PushChair-v1':
-        ids = []
-        for i in range(5):  # Hard-code the 5 data splits for permutation.
-            t_ids = np.random.permutation(len(traj_all) // 5)[:length // 5]
-            t_ids += i * len(traj_all) // 5
-            ids.append(t_ids)
-        ids = np.concatenate(ids)
-    else:
-        ids = np.random.permutation(len(traj_all))[:length]
+    # np.random.seed(args.seed)
+    # # If you use the same seed, you can get same trajectory choice
+    # # Since TurnFaucet uses 10 different faucet models, we shuffle the data
+    # # such that the resulting sampled data are evenly sampled across faucet models.
+    # if args.task == 'TurnFaucet-v0':
+    #     ids = []
+    #     for i in range(10):  # Hard-code the 10 data splits for permutation.
+    #         t_ids = np.random.permutation(len(traj_all) // 10)[:length // 10]
+    #         t_ids += i * len(traj_all) // 10
+    #         ids.append(t_ids)
+    #     ids = np.concatenate(ids)
+    # # Since PushChair uses 5 different faucet models, we shuffle the data
+    # # such that the resulting sampled data are evenly sampled across chair models.
+    # elif args.task == 'PushChair-v1':
+    #     ids = []
+    #     for i in range(5):  # Hard-code the 5 data splits for permutation.
+    #         t_ids = np.random.permutation(len(traj_all) // 5)[:length // 5]
+    #         t_ids += i * len(traj_all) // 5
+    #         ids.append(t_ids)
+    #     ids = np.concatenate(ids)
+    # else:
+    #     ids = np.random.permutation(len(traj_all))[:length]
+    ids = np.arange(length)
 
     dataset['env_states'] = [np.array(traj_all[f"traj_{i}"]['env_states']) for i in ids]
     dataset['obs'] = [np.array(traj_all[f"traj_{i}"]["obs"]) for i in ids]
@@ -340,65 +342,70 @@ if __name__ == "__main__":
     autocot_model.load_state_dict(state_dict_from_ckpt, strict=True)
     autocot_model.eval()
 
-    for i_traj in range(length):
-        traj_state = dataset['obs'][i_traj]
-        traj_action = dataset['actions'][i_traj]
-        unified_t = torch.div(torch.arange(len(traj_state)), float(len(traj_state)))
-        unified_t = unified_t.unsqueeze(-1)
-        key_states_gt = key_states_gts[i_traj]
+    with open(traj_save_keys_path+'/keys.txt', 'w') as fk:
+        for i_traj in range(length):
+            traj_state = dataset['obs'][i_traj]
+            traj_action = dataset['actions'][i_traj]
+            unified_t = torch.div(torch.arange(len(traj_state)), float(len(traj_state)))
+            unified_t = unified_t.unsqueeze(-1)
+            key_states_gt = key_states_gts[i_traj]
 
-        t = np.zeros(shape=[1], dtype=np.int64)
-        state_hist, action_hist = [torch.from_numpy(traj_state[:1]).float()], [torch.from_numpy(traj_action[:1]).float()]
-        unified_t_hist = [unified_t[:1]]
+            t = np.zeros(shape=[1], dtype=np.int64)
+            state_hist, action_hist = [torch.from_numpy(traj_state[:1]).float()], [torch.from_numpy(traj_action[:1]).float()]
+            unified_t_hist = [unified_t[:1]]
 
-        current_label = -1
-        i_begin = 0
+            current_label = -1
+            i_begin = 0
 
-        key_state_step = list()
+            key_state_step = [-1] * params['vq_n_e']  # we only collect the last appear state
+            # For some of the key states are unused, when training we will ignore them
 
-        for step in range(traj_action.shape[0] - 1):
-            # print('step #', step, end=' ')
-            indices = predict(
-                model=autocot_model,
-                action_hist=action_hist,
-                state_hist=state_hist,
-                unified_t_hist=unified_t_hist,
-                t=t,
-            )
-            # print(indices.item(), traj_label[step])
-            indices_item = indices.item()
+            for step in range(traj_action.shape[0] - 1):
+                # print('step #', step, end=' ')
+                indices = predict(
+                    model=autocot_model,
+                    action_hist=action_hist,
+                    state_hist=state_hist,
+                    unified_t_hist=unified_t_hist,
+                    t=t,
+                )
+                # print(indices.item(), traj_label[step])
+                indices_item = indices.item()
 
-            # Label output
-            if indices_item != current_label:
-                if current_label != -1:
-                    print(f'key {current_label}\t[{i_begin}, {step - 1}]', end='')
-                    for i_gt in range(len(key_states_gt)):
-                        if i_begin <= key_states_gt[i_gt][1] <= step - 1:
-                            print(f'\tgt key states', key_states_gt[i_gt][1], key_states_gt[i_gt][0], end='')
-                    print()
-                current_label = indices_item
-                i_begin = step
-                key_state_step.append(step)
+                # Label output
+                if indices_item != current_label:
+                    if current_label != -1:
+                        print(f'key {current_label}\t[{i_begin}, {step - 1}]', end='')
+                        for i_gt in range(len(key_states_gt)):
+                            if i_begin <= key_states_gt[i_gt][1] <= step - 1:
+                                print(f'\tgt key states', key_states_gt[i_gt][1], key_states_gt[i_gt][0], end='')
+                        print()
+                        key_state_step[current_label] = step - 1
+                    current_label = indices_item
+                    i_begin = step
 
-            # update...
-            if len(state_hist) == autocot_model.key_net.block_size // 2:
-                # print(f'len(state_hist) reach context length{autocot_model.key_net.block_size}')
-                assert len(action_hist) == (autocot_model.key_net.block_size // 2)
-                state_hist = state_hist[1:] + [torch.from_numpy(traj_state[step + 1:step + 2]).float()]
-                action_hist = action_hist[1:] + [torch.from_numpy(traj_action[step: step + 1]).float()]
-                unified_t_hist = unified_t_hist[1:] + [unified_t[step + 1: step + 2]]
-                t += 1
-            else:
-                state_hist.append(torch.from_numpy(traj_state[step + 1:step + 2]).float())
-                action_hist.append(torch.from_numpy(traj_action[step: step + 1]).float())
-                unified_t_hist.append(unified_t[step + 1: step + 2])
+                # update...
+                if len(state_hist) == autocot_model.key_net.block_size // 2:
+                    # print(f'len(state_hist) reach context length{autocot_model.key_net.block_size}')
+                    assert len(action_hist) == (autocot_model.key_net.block_size // 2)
+                    state_hist = state_hist[1:] + [torch.from_numpy(traj_state[step + 1:step + 2]).float()]
+                    action_hist = action_hist[1:] + [torch.from_numpy(traj_action[step: step + 1]).float()]
+                    unified_t_hist = unified_t_hist[1:] + [unified_t[step + 1: step + 2]]
+                    t += 1
+                else:
+                    state_hist.append(torch.from_numpy(traj_state[step + 1:step + 2]).float())
+                    action_hist.append(torch.from_numpy(traj_action[step: step + 1]).float())
+                    unified_t_hist.append(unified_t[step + 1: step + 2])
 
-        if current_label != -1:
-            print(f'key {current_label}\t[{i_begin}, {traj_action.shape[0] - 1}]', end='')
-            for i_gt in range(len(key_states_gt)):
-                if i_begin <= key_states_gt[i_gt][1] <= (traj_action.shape[0] - 1):
-                    print(f'\tgt key states', key_states_gt[i_gt][1], key_states_gt[i_gt][0], end='')
-            print()
+            if current_label != -1:
+                print(f'key {current_label}\t[{i_begin}, {traj_action.shape[0] - 1}]', end='')
+                for i_gt in range(len(key_states_gt)):
+                    if i_begin <= key_states_gt[i_gt][1] <= (traj_action.shape[0] - 1):
+                        print(f'\tgt key states', key_states_gt[i_gt][1], key_states_gt[i_gt][0], end='')
+                print()
+                key_state_step[current_label] = traj_action.shape[0] - 1
 
-
-        input()
+            print(key_state_step)
+            for item in key_state_step:
+                fk.write(str(item) + ',')
+            fk.write('\n')

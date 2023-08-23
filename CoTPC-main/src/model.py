@@ -14,6 +14,18 @@ from torch.nn import functional as F
 import numpy as np
 
 
+def code_book_len_to_key_state_mark(length, key_state_loss_str='0'):
+    # As lazy as possible, this function transform length of code book (n_e)
+    # into the key state mark here used for CoTPC
+    # e.g. if you have a code book of 5 entry, and use key state prediction from CoTPC TF layer 0, 2, 3
+    # it wil return:
+    # {'key_states': 'abcde', 'key_state_loss': '023'}
+    key_states = ''
+    for i in range(length):
+        key_states += chr(i + 97)
+    return {'key_states': key_states, 'key_state_loss': key_state_loss_str}
+
+
 class MLP(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dims=[], act_fn='relu'):
         super().__init__()
@@ -66,7 +78,7 @@ class GPTConfig:
             assert 'key_state_loss' in kwargs, 'Should specify `key_state_loss`'
             # It is in the form of e.g., '023', meaning the features out of attention
             # layers of idx 0, 2, 3 are used for key state prediction losses.
-            assert kwargs['key_state_loss'] not in  ['', None] and \
+            assert kwargs['key_state_loss'] not in ['', None] and \
                 np.all([l.isnumeric() for l in kwargs['key_state_loss']])
 
             self.key_states = kwargs['key_states']
@@ -105,7 +117,7 @@ class CausalSelfAttentionWithCoT(nn.Module):
         # causal mask to ensure that attention is only applied to the left in the input sequence
         block_size = config.block_size + config.len_key_states
         self.register_buffer("mask",
-            torch.tril(torch.ones(block_size, block_size)).view(1, 1, block_size, block_size))
+                             torch.tril(torch.ones(block_size, block_size)).view(1, 1, block_size, block_size))
 
         self.n_head = config.n_head
         self.model_type = config.model_type
@@ -114,19 +126,19 @@ class CausalSelfAttentionWithCoT(nn.Module):
         # For the learnable key state query tokens, they are actually all-to-all, meaning
         # they can access to all future tokens during inference, and up to a future step
         # randomly selected during training (see `key_state_mask` in forward(...)).
-        self.mask[:,:,:self.len_key_states] = 1.0
+        self.mask[:, :, :self.len_key_states] = 1.0
 
     def forward(self, x, key_state_mask=None):
         B, T, C = x.size()
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        k = self.key(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = self.query(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = self.value(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        k = self.key(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+        q = self.query(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
+        v = self.value(x).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  # (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.mask[:,:,:T,:T] == 0, float('-inf'))  # Masked attention
+        att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float('-inf'))  # Masked attention
 
         # Masks used for the learnable key state query tokens, which are not causal (auto-regressive).
         if 'cot' in self.model_type:
@@ -135,8 +147,8 @@ class CausalSelfAttentionWithCoT(nn.Module):
 
         att = F.softmax(att, dim=-1)
         att = self.attn_drop(att)
-        y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+        y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        y = y.transpose(1, 2).contiguous().view(B, T, C)  # re-assemble all head outputs side by side
 
         # output projection
         y = self.resid_drop(self.proj(y))
@@ -198,7 +210,7 @@ class BlocksWithCoT(nn.Module):
             # When '+a', we always ignore the last action token (set mask=1).
             mask = torch.arange(0, T).repeat(B, 1) > r + self.len_key_states
             key_state_mask = torch.zeros(
-                [B, self.n_head, T, T], dtype=bool, device=x.device)
+                [B, self.n_head, T, T], dtype=torch.bool, device=x.device)
             key_state_mask[:, :, :self.len_key_states, :] = \
                 mask[:, None, None, :].repeat(1, self.n_head, self.len_key_states, 1)
 
@@ -327,7 +339,7 @@ class GPTWithCoT(nn.Module):
             key_state_preds = []
             for idx, loss_layer_idx in enumerate([int(c) for c in self.key_state_loss]):
                 key_state_preds.append(self.key_state_predictors[idx](
-                    intermediate_feats[loss_layer_idx][:,:self.len_key_states]))
+                    intermediate_feats[loss_layer_idx][:, :self.len_key_states]))
 
             # Get rid of dims for key state query tokens.
             act_preds = torch.split(

@@ -1,5 +1,5 @@
 import numpy as np
-from math import exp, pow, log
+from math import exp, pow, log, cos, sin, pi
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -149,7 +149,7 @@ class AutoCoT(pl.LightningModule):
         sa_config,
         vq_n_e=10,
         vq_coe_ema=0.95,
-        KT=2.0,
+        KT=0.1,
         optimizers_config=None,
         scheduler_config=None,
         state_dim=-1,
@@ -157,6 +157,8 @@ class AutoCoT(pl.LightningModule):
         key_dim=-1,
         e_dim=-1,
         vq_t_emb_rate=2.0,
+        vq_coe_r_l1=0.0,
+        vq_bound_clip_decrease_r=None
     ):
         super().__init__()
 
@@ -265,8 +267,10 @@ class AutoCoT(pl.LightningModule):
             KT=KT,
             use_ema=True,
             coe_ema=vq_coe_ema,
-            t_emb_rate=vq_t_emb_rate
+            t_emb_rate=vq_t_emb_rate,
+            bound_clip_decrease_r=vq_bound_clip_decrease_r
         )
+        self.vq_coe_r_l1 = vq_coe_r_l1
 
         # When training, we need to adjust the goal function part in sa_net
         # so that every goal function (params by the chosen out v_param) can discriminate
@@ -292,46 +296,25 @@ class AutoCoT(pl.LightningModule):
         self.flag_cluster = False
         self.goal_cluster = True
 
+        self.progress_bar_step = 0.0
+
         self.automatic_optimization = False
 
+    def mask_cluster_rate(self):
+        # calculate the mask off rate of cluster according to action prediction behavior
+        # return a fp between [0, 1], meaning the proportion of mask off clustering place
+        return (0.5 + cos(self.progress_bar_step * pi) * 0.5) ** 2
+
     def on_train_batch_start(self, batch, batch_idx):
+        self.progress_bar_step = self.trainer.global_step / self.trainer.max_steps
+        self.key_book.reset_oor_r()
+
         self.step_cluster += 1
         if self.step_cluster == self.cyc_cluster:
             self.step_cluster = 0
             self.flag_cluster = True
         else:
             self.flag_cluster = False
-
-    def split_keys(self, loss_mean, tolerance=1.0):
-        with torch.no_grad():
-            loss_label_max, loss_label_i = torch.max(self.key_book.loss_label, dim=-1)
-            print('loss_label_max =', loss_label_max)
-            if loss_label_max > loss_mean * (1.0 + tolerance):
-                # try tp split loss_label_i
-                # first find a (Latest Recent) unused (LRU) index
-                ix = 0
-                for ix in range(self.key_book.n_e):
-                    if self.key_book.n_label[ix] == 0:
-                        break
-                loss_label_i_new = ix
-                print('loss_label_i_new', loss_label_i_new)
-                if loss_label_i_new >= self.key_book.n_e:
-                    print('No Index Left. Give up Splitting')
-                    return
-                # else split the keys[loss_label_i], one in keys[loss_label_i], one in keys[loss_label_i_new]
-                key_old = self.key_book.keys[loss_label_i]  # (key_dim)
-
-                # assert at autocot that you are using time-step spherical embedding
-                sin_t = key_old[0]
-                key_old_wote = torch.div(key_old[1:], torch.sqrt(1.0 - sin_t ** 2) + 1e-9)
-                # split into two new keys according to embedding of time
-                key_new_1, key_new_2 = \
-                    self.ks_t_emb(key_old_wote, (self.key_book.min_ut[loss_label_i] * 2.0 + self.key_book.max_ut[loss_label_i]) / 3.0), \
-                    self.ks_t_emb(key_old_wote, (self.key_book.min_ut[loss_label_i] + self.key_book.max_ut[loss_label_i] * 2.0) / 3.0)
-
-                # update the keys
-                self.key_book.keys[loss_label_i] = key_new_1
-                self.key_book.keys[loss_label_i_new] = key_new_2
 
     def statistic_indices(self, indices, unified_t=None):
         # (B, T)
@@ -341,10 +324,10 @@ class AutoCoT(pl.LightningModule):
                 table[:, i] = torch.sum((indices == i).to(torch.int), dim=-1)
             print(table[:min(indices.shape[0], 32), ...])
         else:
-            table = torch.zeros(size=(10, self.key_book.n_e), dtype=torch.int32)  # (B, n_e)
-            for i in range(10):
-                lbm = torch.ge(unified_t, i*0.1)
-                ubm = torch.le(unified_t, (i+1)*0.1)
+            table = torch.zeros(size=(self.key_book.n_e, self.key_book.n_e), dtype=torch.int32)  # (B, n_e)
+            for i in range(self.key_book.n_e):
+                lbm = torch.ge(unified_t, i / self.key_book.n_e)
+                ubm = torch.le(unified_t, (i+1) / self.key_book.n_e)
                 mask_t = torch.where(torch.logical_and(lbm, ubm), 1, 0).to(dtype=torch.int32)
                 for j in range(self.key_book.n_e):
                     table[i, j] = ((indices == j).to(torch.int) * mask_t).sum()
@@ -352,6 +335,8 @@ class AutoCoT(pl.LightningModule):
             print(table)
             print(torch.div(F.sigmoid(self.key_book.t_keys.weight.data), self.key_book.n_e).squeeze(-1)
                   + self.key_book.t_base.squeeze(-1))
+            print(self.key_book.get_r().squeeze(-1))
+            print(self.key_book.r_p_reset)
 
     def loss_reward(self, states, indices):
         # indices (B, T) choice of index of this batch
@@ -360,8 +345,17 @@ class AutoCoT(pl.LightningModule):
         assert self.sa_type == 'egpt' or self.sa_type == 'egpthn'
         for di in range(self.key_book.n_e):
             self.vq_turn = ((self.vq_turn + 1) % self.key_book.n_e)
+            # print('indices', indices)
+            # print('self.vq_turn', self.vq_turn)
+            # input()
+            # print('indices', indices)
+            # print('indices.shape', indices.shape)
+            # input()
             mask_i = torch.eq(indices, self.vq_turn)
+            # print(mask_i)
+            # input()
             n_i = mask_i.sum()
+            # print('n_i', n_i)
             if n_i != 0:
                 # update the reward function of this part
                 key_same_i = self.key_book.vparams(torch.tensor([[self.vq_turn]], device=states.device))
@@ -392,6 +386,13 @@ class AutoCoT(pl.LightningModule):
         encoding_indices, v_global, vparams_w, vparams_hard, w_max, score_ksh, key_soft_t_emb = \
             self.key_book(key_soft, unified_t)
 
+        # print('just after book')
+        # input()
+        # print('encoding_indices', encoding_indices)
+        # print('encoding_indices.shape', encoding_indices.shape)
+        # print('max, min', encoding_indices.max(), encoding_indices.min())
+        # input()
+
         state_recs_from_keys = self.rec_net(key_soft_t_emb, timesteps)
 
         # loss: state transmission
@@ -399,7 +400,8 @@ class AutoCoT(pl.LightningModule):
         # loss: state reconstruction
         l_s_recs, _ = get_loss(state_recs_from_keys, states, lengths)
         # loss: clustering behind
-        l_label_cluster = torch.neg(torch.log(w_max)).mean()
+        ls_label_cluster = torch.neg(torch.log(w_max))
+        l_label_cluster = ls_label_cluster.mean()
 
         # loss_key_soft_adj = 0.0
 
@@ -424,6 +426,28 @@ class AutoCoT(pl.LightningModule):
             l_s_preds = 0.0
             l_a_preds, ls_a_preds = get_loss(action_preds, actions, lengths)
 
+            # select a part of action prediction, only update a part of clustering related loss according to it
+            ls_a_preds_flattened = ls_a_preds.view(-1)
+            mask_cluster_rate = self.mask_cluster_rate()
+            _, cluster_mask_index = \
+                torch.topk(ls_a_preds_flattened, k=int(mask_cluster_rate*ls_a_preds_flattened.shape[0]))
+            cluster_mask_flattened = torch.ones_like(ls_a_preds_flattened, dtype=torch.float32)
+            # print('cluster_mask_flattened.shape', cluster_mask_flattened.shape)
+            # input()
+            # print('cluster_mask_index.shape', cluster_mask_index.shape)
+            # input()
+            cluster_mask_flattened[cluster_mask_index] = 0.0
+
+            cluster_mask = cluster_mask_flattened.reshape(ls_a_preds.shape)
+            self.log(name='cm', value=mask_cluster_rate, prog_bar=True, on_step=True, on_epoch=True)
+            # print('rate mask', cluster_mask.sum().item() / ls_a_preds_flattened.shape[0])
+            # print('cluster_mask.shape', cluster_mask.shape)
+            # input()
+
+            # l_a_preds_max = torch.max(ls_a_preds)
+            # with torch.no_grad():
+            #     self.key_book.r_p_reset = (l_a_preds_max - l_a_preds) / (l_a_preds_max * self.key_book.n_e)
+
             # need some regulation on the explicit reward (ascent reward, large at switching point)
             l_policy = l_a_preds + l_s_trans + self.coe_rec * l_s_recs
             if self.flag_cluster:
@@ -432,15 +456,20 @@ class AutoCoT(pl.LightningModule):
                 # log(1.0 - reward) should be as large as possible
                 # minimize -log(1.0 - reward)
                 # also we need to update one set of classifier during onr iteration
-
+                # print('before reward_i')
+                # print('encoding_indices', encoding_indices)
                 reward_i = self.loss_reward(states, indices=encoding_indices)
+                self.log(name='rt', value=float(self.vq_turn), prog_bar=True, on_step=True, on_epoch=True)
+                # print('after reward_i')
+                reg_r_l2 = (self.key_book.get_r() ** 2).sum()
 
                 l_policy = \
                     l_policy \
-                    + self.coe_cluster * (
-                        l_label_cluster
-                        + torch.neg(torch.log(1.0 - reward)).mean()
-                        + torch.neg(torch.log(1.0 - reward_i)).mean()
+                    + 2.0 * self.coe_cluster * (
+                        (ls_label_cluster * cluster_mask).mean()
+                        + (torch.neg(torch.log(1.0 - reward)) * cluster_mask).mean()
+                        + (torch.neg(torch.log(1.0 - reward_i)) * cluster_mask).mean()
+                        + self.vq_coe_r_l1 * reg_r_l2
                     )
 
         else:

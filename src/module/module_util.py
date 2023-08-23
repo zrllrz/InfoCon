@@ -9,6 +9,27 @@ import torch.nn.functional as F
 from math import log
 
 
+class unifiedTime(nn.Module):
+    def __init__(self, n_e, eps=1e-12):
+        super().__init__()
+        self.n_e = n_e
+        self.param_ut = nn.Parameter(torch.rand(n_e + 1, 1))
+        self.eps = eps
+
+    def forward(self):
+        # no parameters!!!
+        # we calculate the unified time according to parameters
+        ut_cumsum = torch.cumsum(self.param_ut, dim=0)
+        print(ut_cumsum)
+        ut = torch.div(ut_cumsum, ut_cumsum[-1, 0] + self.eps)
+        return ut[:-1]
+
+    def resert_ut(self, u_t):
+        with torch.no_grad():
+            param_ut = torch.cat([u_t[0], u_t[1:] - u_t[:-1], 1.0 - u_t[-1]], dim=0)
+            self.param_ut.data = param_ut
+
+
 class FreqEncoder(nn.Module):
     def __init__(self, length=32):
         super().__init__()

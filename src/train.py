@@ -70,6 +70,10 @@ def parse_args():
                         help="Temperature for classifier")
     parser.add_argument("--vq_t_emb_rate", default='1.2', type=str,
                         help="division rate for time sphere embedding")
+    parser.add_argument("--vq_coe_r_l1", default='0.0', type=str,
+                        help="l1 regularization on length of every prototype")
+    parser.add_argument("--vq_use_clip_decrease_r", action='store_true',
+                        help="Flag for using clipping when r is decreasing during training")
 
     parser.add_argument("--coe_cluster", default='0.1', type=str, help="cluster weight")
     parser.add_argument("--coe_rec", default='1.0', type=str, help="reconstruction weight from key_soft")
@@ -130,6 +134,7 @@ if __name__ == "__main__":
         + '-r' + str(args.n_rec_layer) \
         + '-c' + str(args.vq_n_e) \
         + '_KT' + args.KT + '_EMA' + args.vq_coe_ema + '_temb' + args.vq_t_emb_rate \
+        + ('-clip_r' if args.vq_use_clip_decrease_r else '') + '-r_l1' + args.vq_coe_r_l1 \
         + '-' + args.sa_type + '_s' + str(args.n_state_layer) + '_a' + str(args.n_action_layer) \
         + '-emb' + str(args.n_embd) \
         + '-key' + str(args.dim_key) \
@@ -267,6 +272,12 @@ if __name__ == "__main__":
     else:
         scheduler_config = None
 
+    if args.vq_use_clip_decrease_r:
+        # calculate the bound
+        vq_bound_clip_decrease_r = (0.999 - 0.001) / args.n_iters
+    else:
+        vq_bound_clip_decrease_r = None
+
     autocot_model = AutoCoT(
         key_config=key_config,
         sa_config=sa_config,
@@ -281,6 +292,8 @@ if __name__ == "__main__":
         key_dim=args.dim_key,
         e_dim=args.dim_e,
         vq_t_emb_rate=float(args.vq_t_emb_rate),
+        vq_coe_r_l1=float(args.vq_coe_r_l1),
+        vq_bound_clip_decrease_r=vq_bound_clip_decrease_r
     )
 
     # autocot_model.configure_optimizers()

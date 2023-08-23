@@ -20,7 +20,7 @@ def mse_loss_with_weights(preds, targets, weights=None):
         return torch.mean(losses), losses
     else:
         assert losses.shape == weights.shape, losses.shape
-        return torch.mean(losses * weights), losses
+        return torch.mean(losses * weights), losses * weights
 
 
 def get_loss(preds, targets, lengths):

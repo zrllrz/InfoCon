@@ -9,8 +9,8 @@ from collections import deque
 from tqdm import tqdm
 import numpy as np
 
-from data import MS2Demos, get_padding_fn
-from model import GPTConfig, GPTWithCoT
+from data_autocot import MS2Demos, get_padding_fn
+from model import GPTConfig, GPTWithCoT, code_book_len_to_key_state_mark
 from train_utils import CosineAnnealingLRWarmup
 
 try:
@@ -48,6 +48,10 @@ def parse_args():
                         help="Coefficient for the key state prediction loss.")
     parser.add_argument('--model_type', type=str, default='s+a+cot',
                         help="Model type for the CoTPC model (see GPTConfig).")
+    parser.add_argument('--vq_n_e', type=int, default=10,
+                        help="Length of code book (number of entries) back in AutoCoT."
+                             "Transform it into key_states and key_state_loss,"
+                             "which will cover the effect of other two args")
     parser.add_argument('--key_states', type=str, default='a',
                         help="Which key states to use (see GPTConfig for the spec. format).")
     parser.add_argument("--key_state_loss", default='', type=str,
@@ -125,7 +129,19 @@ if __name__ == "__main__":
     print('Model name:', args.model_name)
 
     if 'cot' in args.model_type:
-        assert args.key_states, 'Should specify --key_states.'
+        assert (args.vq_n_e != 0) or args.key_states, 'Should specify --key_states.'
+        if args.vq_n_e != 0:
+            key_states_dict = \
+                code_book_len_to_key_state_mark(length=args.vq_n_e,
+                                                key_state_loss_str=args.key_state_loss)
+            args_key_states, args_key_state_loss = key_states_dict['key_states'], key_states_dict['key_state_loss']
+
+        else:
+            args_key_states, args_key_state_loss = args.key_states, args.key_state_loss
+    else:
+        args_key_states, args_key_state_loss = 'a', '0'
+    print(args_key_states, args_key_state_loss)
+
 
     train_dataset = MS2Demos(
         control_mode=args.control_mode,
@@ -134,12 +150,13 @@ if __name__ == "__main__":
         min_seq_length=args.min_seq_length,
         max_seq_length=args.context_length,
         with_key_states='cot' in args.model_type,
-        task=args.task, multiplier=args.multiplier)
+        task=args.task, multiplier=args.multiplier
+    )
     print('Training data size:', len(train_dataset))
     print('Max steps:', train_dataset.max_steps)
 
     input_dict = ['s', 'a', 't']
-    input_dict += ['k'] if 'cot' in args.model_type else []
+    input_dict += ['k', 'km'] if 'cot' in args.model_type else []
     collate_fn = get_padding_fn(input_dict)
     train_data = DataLoader(
         dataset=train_dataset,
@@ -160,8 +177,8 @@ if __name__ == "__main__":
         n_head=args.n_head,
         n_embd=args.n_embd,
         model_type=args.model_type,
-        key_states=args.key_states,
-        key_state_loss=args.key_state_loss,
+        key_states=args_key_states,
+        key_state_loss=args_key_state_loss,
         max_timestep=train_dataset.max_steps,
         embd_pdrop=float(args.dropout),
         resid_pdrop=float(args.dropout),
@@ -209,8 +226,7 @@ if __name__ == "__main__":
     losses_key_states = deque(maxlen=1000)
 
     # Convert key states to integers.
-    key_states = [ord(c) - ord('a') for c in args.key_states]
-
+    key_states = [ord(c) - ord('a') for c in args_key_states]
     # Main training loop.
     for idx in tqdm(range(args.n_iters + 1)):
 
@@ -238,8 +254,12 @@ if __name__ == "__main__":
         if 'cot' in args.model_type:
             ks_gt = torch.stack(
                 [batch['k'][:, k_idx] for k_idx in key_states], 1)
+            # For CoTPC with AutoCoT labeled, we need to mask the
+            ks_mask = torch.stack([batch['km'][:, k_idx] for k_idx in key_states], 1).unsqueeze(-1)
+            # (B, len(key_states), 1)
+
             loss_key_states = torch.mean(torch.stack(
-                [F.mse_loss(ks_pred, ks_gt) for ks_pred in key_states_pred]))
+                [F.mse_loss(ks_pred * ks_mask, ks_gt * ks_mask) for ks_pred in key_states_pred]))
             if args.key_state_coeff > 0:
                 total_loss += args.key_state_coeff * loss_key_states
 

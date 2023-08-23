@@ -35,8 +35,10 @@ class MS2Demos(Dataset):
         self.max_steps = -1  # Maximum timesteps across all trajectories.
         traj_path = os.path.join(DATA_PATH,
                                  f'{task}/trajectory.{obs_mode}.{control_mode}.h5')
+        key_path = os.path.join(DATA_PATH, f'{task}/keys.txt')
         print('Traj path:', traj_path)
-        self.data = self.load_demo_dataset(traj_path, length)
+        print('Key path:', key_path)
+        self.data = self.load_demo_dataset(traj_path, key_path, length)
 
         # Cache key states for faster data loading.
         if self.with_key_states:
@@ -80,13 +82,14 @@ class MS2Demos(Dataset):
         if self.with_key_states:
             if f'key_states_{index}' not in self.idx_to_key_states:
                 self.idx_to_key_states[f'key_states_{index}'] = self.get_key_states(index)
-            data_dict['k'] = self.idx_to_key_states[f'key_states_{index}']
+            data_dict['k'] = self.idx_to_key_states[f'key_states_{index}'][0]
+            data_dict['km'] = self.idx_to_key_states[f'key_states_{index}'][1]
         return data_dict
 
     def info(self):  # Get observation and action shapes.
         return self.data['obs'][0].shape[-1], self.data['actions'][0].shape[-1]
 
-    def load_demo_dataset(self, path, length):
+    def load_demo_dataset(self, path, key_path, length):
         dataset = {}
         traj_all = h5py.File(path)
         if length == -1:
@@ -136,11 +139,11 @@ class MS2Demos(Dataset):
 
         # Here we can read the key states from the txt we made (I do not like json ... sorry :) )
         dataset['key_state_step'] = list()
-        with open(path+'_keys.txt', 'r') as fk:
+        with open(key_path, 'r') as fk:
             lines = fk.readlines()  # Read all lines
             for i in ids:
                 line = lines[i].split(',')[:-1]
-                line = [int(item) for item in line]
+                line = np.array([int(item) for item in line])
                 dataset['key_state_step'].append(line)
 
         self.max_steps = np.max([len(s) for s in dataset['env_states']])
@@ -152,11 +155,17 @@ class MS2Demos(Dataset):
         # Thus, we need to offset the `step_idx`` by one.
 
         key_state_step = self.data['key_state_step'][idx]
+        # print('key_state_step =', key_state_step)
+
         key_states = [self.data['obs'][idx][step] for step in key_state_step]
+        # print('key_states', key_states)
+
+        key_state_mask = np.array([1.0 * (step != -1) for step in key_state_step])
+        # print('key_state_mask', key_states)
 
         key_states = np.stack(key_states, 0).astype(np.float32)
         assert len(key_states) > 0, self.task
-        return key_states
+        return key_states, key_state_mask
 
 
 # To obtain the padding function for sequences.
@@ -202,7 +211,7 @@ if __name__ == "__main__":
         with_key_states=True,
         task=task)
 
-    collate_fn = get_padding_fn(['s', 'a', 't', 'k'])
+    collate_fn = get_padding_fn(['s', 'a', 't', 'k', 'km'])
     train_data = DataLoader(
         dataset=train_dataset,
         batch_size=batch_size,
