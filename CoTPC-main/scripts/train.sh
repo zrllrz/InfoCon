@@ -3,12 +3,12 @@
 cd ../src &&
 
 # Example script for PickCube training (with a good set of hyper-parameters).
-CUDA_VISIBLE_DEVICES=7 python train.py \
-   --model_name=some_model_name \
+CUDA_VISIBLE_DEVICES=3 python train.py \
+   --model_name=TurnFaucet-v0-8-27 \
    --num_traj=500 --n_iters=1_800_000 --weight_decay=1e-3 --lr_schedule=cos_decay_with_warmup \
    --context_length=60 --model_type=s+a+cot \
-   --task=PegInsertionSide-v0 --key_state_coeff=0.1 \
-   --n_layer=4 --vq_n_e=10 --key_state_loss=012 --key_states=ab \
+   --task=TurnFaucet-v0 --key_state_coeff=0.1 \
+   --n_layer=4 --vq_n_e=10 --key_state_loss=0 --key_states=ab \
    --init_lr=5e-4 --num_workers=20
 
 # CUDA_VISIBLE_DEVICES=0 python train.py \

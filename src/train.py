@@ -11,6 +11,7 @@ import pytorch_lightning as pl
 from data import MS2Demos, get_padding_fn
 from autocot import (
     KeyNetConfig,
+    FutureNetConfig,
     ImplicitSAResFCConfig,
     ImplicitSAGPTConfig,
     ExplicitSAGPTConfig,
@@ -61,6 +62,9 @@ def parse_args():
 
     parser.add_argument("--n_rec_layer", default=4, type=int,
                         help="Number of attention layers in RecNet")
+
+    parser.add_argument("--n_future_layer", default=4, type=int,
+                        help="Number of attention layers in FutureNet")
 
     parser.add_argument('--vq_n_e', type=int, default=100,
                         help="How many kinds of keys in the key_book")
@@ -132,6 +136,7 @@ if __name__ == "__main__":
         args.model_name \
         + 'k' + str(args.n_key_layer) \
         + '-r' + str(args.n_rec_layer) \
+        + (('-f' + str(args.n_future_layer)) if args.n_future_layer != 0 else '') \
         + '-c' + str(args.vq_n_e) \
         + '_KT' + args.KT + '_EMA' + args.vq_coe_ema + '_temb' + args.vq_t_emb_rate \
         + ('-clip_r' if args.vq_use_clip_decrease_r else '') + '-r_l1' + args.vq_coe_r_l1 \
@@ -190,6 +195,20 @@ if __name__ == "__main__":
         n_layer=args.n_rec_layer,
         max_timestep=train_dataset.max_steps,
     )
+
+    if args.n_future_layer != 0:
+        future_config = FutureNetConfig(
+            n_embd=args.n_embd,
+            n_head=args.n_head,
+            attn_pdrop=float(args.dropout),
+            resid_pdrop=float(args.dropout),
+            embd_pdrop=float(args.dropout),
+            block_size=args.context_length,
+            n_layer=args.n_future_layer,
+            max_timestep=train_dataset.max_steps,
+        )
+    else:
+        future_config = None
     if args.sa_type == 'resfc':
         sa_config = ImplicitSAResFCConfig(
             n_embd=args.n_embd,
@@ -283,6 +302,7 @@ if __name__ == "__main__":
         key_config=key_config,
         sa_config=sa_config,
         rec_config=rec_config,
+        future_config=future_config,
         vq_n_e=args.vq_n_e,
         vq_coe_ema=float(args.vq_coe_ema),
         KT=float(args.KT),

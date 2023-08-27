@@ -12,6 +12,7 @@ import torch
 from autocot import (
     RecNetConfig,
     KeyNetConfig,
+    FutureNetConfig,
     ImplicitSAGPTConfig,
     ExplicitSAGPTConfig,
     ExplicitSAHNGPTConfig,
@@ -261,6 +262,20 @@ if __name__ == "__main__":
         n_layer=params['n_rec_layer'],
         max_timestep=max_timestep
     )
+    if 'n_future_layer' in params.keys() and params['n_future_layer'] != 0:
+        future_config = FutureNetConfig(
+            n_embd=params['n_embd'],
+            n_head=params['n_head'],
+            attn_pdrop=float(params['dropout']),
+            resid_pdrop=float(params['dropout']),
+            embd_pdrop=float(params['dropout']),
+            block_size=params['context_length'],
+            n_layer=params['n_future_layer'],
+            max_timestep=max_timestep
+        )
+    else:
+        future_config = None
+
 
     if params['sa_type'] == 'resfc':
         sa_config = ImplicitSAResFCConfig(
@@ -326,6 +341,7 @@ if __name__ == "__main__":
         key_config=key_config,
         sa_config=sa_config,
         rec_config=rec_config,
+        future_config=future_config,
         vq_n_e=params['vq_n_e'],
         vq_coe_ema=float(params['vq_coe_ema']),
         KT=float(params['KT']),
@@ -342,7 +358,7 @@ if __name__ == "__main__":
     autocot_model.load_state_dict(state_dict_from_ckpt, strict=True)
     autocot_model.eval()
 
-    with open(traj_save_keys_path+'/keys.txt', 'w') as fk:
+    with open(traj_save_keys_path+'/keys-8-27-1.txt', 'w') as fk:
         for i_traj in range(length):
             traj_state = dataset['obs'][i_traj]
             traj_action = dataset['actions'][i_traj]

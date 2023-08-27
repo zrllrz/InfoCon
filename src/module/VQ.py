@@ -265,20 +265,31 @@ class VQClassifierNNTime(nn.Module):
         vparams_norm = self.split_vparams_norm(self.vparams.weight)  # (n_e, e_dim)
         vparams_w_flattened = \
             w_flattened.view(B * T, 1, self.n_e) @ (vparams_norm.view(1, self.n_e, self.e_dim).detach())
+        key_w_flattened = \
+            w_flattened.view(B * T, 1, self.n_e) @ (keys_norm.view(1, self.n_e, self.key_dim + 1).detach())
+
         vparams_w_flattened = vparams_w_flattened.squeeze(1)  # (B*T, e_dim)
+        key_w_flattened = key_w_flattened.squeeze(1)  # (B*T, key_dim + 1)
+
         vparams_w_flattened = self.split_vparams_norm(vparams_w_flattened)  # (B*T, e_dim)
+        key_w_flattened = F.normalize(key_w_flattened, p=2.0, dim=-1)  # (B*T, key_dim + 1)
+
         vparams_w = vparams_w_flattened.view(B, T, self.e_dim)  # (B, T, e_dim)
         vparams_w = vparams_w.contiguous()  # (B, T, e_dim)
+        key_w = key_w_flattened.view(B, T, self.key_dim + 1)
+        key_w = key_w.contiguous()
 
         vparams_hard = self.vparams(encoding_indices).view(B, T, self.e_dim)  # (B, T, e_dim)
+        key_hard = keys_norm[encoding_indices.view(-1)].view(B, T, self.key_dim+1)  # (B, T, key_dim+1)
+
         vparams_hard = self.split_vparams_norm(vparams_hard)  # normalization (B, T, e_dim)
         vparams_hard = vparams_hard.contiguous()
+        key_hard = key_hard.contiguous()
         vparams_hard = vparams_w + (vparams_hard - vparams_w).detach()  # store gradient
-
-        v_global = torch.max(encoding_indices) - torch.min(encoding_indices)
+        key_hard = key_w + (key_hard - key_w).detach()  # store gradient
 
         return \
-            encoding_indices, v_global, \
+            encoding_indices, key_hard, \
             vparams_w, vparams_hard, w_max, score_ksh, key_soft_t_emb
 
     def forward(self, key_soft, u_t):
@@ -353,6 +364,7 @@ class VQClassifierNN(nn.Module):
         self.n_label = torch.zeros_like(self.n_label)
         self.min_ut = torch.full_like(self.min_ut, fill_value=float('+inf'))
         self.max_ut = torch.full_like(self.min_ut, fill_value=float('-inf'))
+
 
     def loss_dispersion(self):
         keys_norm = F.normalize(self.keys.weight, p=2.0, dim=-1)  # (n_e, key_dim)

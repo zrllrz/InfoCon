@@ -16,6 +16,7 @@ class unifiedTime(nn.Module):
         self.param_ut = nn.Parameter(torch.rand(n_e + 1, 1))
         self.eps = eps
 
+
     def forward(self):
         # no parameters!!!
         # we calculate the unified time according to parameters

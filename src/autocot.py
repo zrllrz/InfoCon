@@ -5,8 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from module.module_util import FreqEncoder, TimeSphereEncoder, mereNLL
-from module.VQ import VQClassifierNNTime, VQClassifierNN, VQClassifier, VQNeighbor, VQNeighbor2, VQElastic, VQNeighborBasic
-from module.GPT import KeyNet, RecNet, ImplicitSAGPT, ExplicitSAGPT, ExplicitSAHNGPT, ActCommitNet, ENet, MLP
+from module.VQ import VQClassifierNNTime, VQClassifierNN, VQClassifier, VQNeighbor, VQNeighbor2, VQNeighborBasic
+from module.GPT import KeyNet, RecNet, FutureNet, ImplicitSAGPT, ExplicitSAGPT, ExplicitSAHNGPT, ActCommitNet, ENet, MLP
 from module.ResNetFC import ImplicitSAResFC, ExplicitSAHN
 
 import pytorch_lightning as pl
@@ -141,12 +141,24 @@ class ActCommitNetConfig(RootConfig):
         self.use_key_energy = use_key_energy
 
 
+class FutureNetConfig(RootConfig):
+    def __init__(self, n_embd, n_head,
+                 attn_pdrop, resid_pdrop, embd_pdrop,
+                 block_size, n_layer, max_timestep):
+        super().__init__(
+            n_embd, n_head,
+            attn_pdrop, resid_pdrop, embd_pdrop,
+            block_size, 'w_key', n_layer, max_timestep
+        )
+
+
 class AutoCoT(pl.LightningModule):
     def __init__(
         self,
         key_config,
         rec_config,
         sa_config,
+        future_config=None,
         vq_n_e=10,
         vq_coe_ema=0.95,
         KT=0.1,
@@ -206,6 +218,15 @@ class AutoCoT(pl.LightningModule):
         # self.register_buffer('w_ss', w_ss)
 
         # sa_net, for action, next_state prediction to eval the hard key
+        if future_config is None:
+            self.future_net = None
+        else:
+            self.future_net = FutureNet(
+                config=future_config,
+                state_dim=state_dim,
+                action_dim=action_dim,
+                key_dim=key_dim+1
+            )
 
         self.sa_type = sa_config.type
         if sa_config.type == 'resfc':
@@ -371,6 +392,22 @@ class AutoCoT(pl.LightningModule):
         print('in autocot method: loss_reward: should not reach here!')
         assert False
 
+    def get_future_state(self, states, indices):
+        # states (B, T, C)
+        # indices (B, T)
+        B, T = indices.shape
+        arange_ext = torch.arange(T, device=states.device).view(1, -1).repeat(B, 1)
+        mask = torch.logical_not(torch.eq(indices[:, 1:], indices[:, :-1]))
+        his_ind = torch.full(size=(B, 1), fill_value=(T-1), device=states.device)
+        future_state_indices = torch.full(size=(B, 1), fill_value=(T-1), device=states.device)
+        for i in range(T-2, -1, -1):
+            new_ind = torch.where(mask[:, i:(i+1)], arange_ext[:, i:(i+1)], his_ind)
+            his_ind = new_ind
+            future_state_indices = torch.cat([new_ind, future_state_indices], dim=1)
+        future_state = \
+            torch.gather(states, dim=1, index=future_state_indices.unsqueeze(-1).repeat(1, 1, states.shape[2]))
+        return future_state
+
     def training_step(self, batch, batch_idx):
         # separate optimzing whole net and the embedding space
         self.step += 1
@@ -385,23 +422,37 @@ class AutoCoT(pl.LightningModule):
         # first forward, use policy and implicit energy to adjust key_soft, key_book #
         ##############################################################################
         key_soft, state_trans = self.key_net(states, timesteps, actions)
-        encoding_indices, v_global, vparams_w, vparams_hard, w_max, score_ksh, key_soft_t_emb = \
+        encoding_indices, key_hard, vparams_w, vparams_hard, w_max, score_ksh, key_soft_t_emb = \
             self.key_book(key_soft, unified_t)
 
+        if self.future_net is not None:
+            # keys_norm = self.key_book.get_keys() * self.key_book.get_r()
+            # keys_norm = \
+            #     keys_norm[encoding_indices.view(-1)].view(encoding_indices.shape[0], encoding_indices.shape[1], -1)
+            # # don't forget to store gradient!
+            # keys_norm = \
+            #     F.normalize(key_soft, p=2.0, dim=-1) \
+            #     + (keys_norm - F.normalize(key_soft, p=2.0, dim=-1)).detach()
+            state_future_preds = self.future_net(states, timesteps, actions, keys=key_hard)
+            state_future = self.get_future_state(states, encoding_indices)
+            l_future, _ = get_loss(state_future_preds, state_future, lengths)
+        else:
+            l_future = 0.0
         # print('just after book')
         # input()
         # print('encoding_indices', encoding_indices)
         # print('encoding_indices.shape', encoding_indices.shape)
         # print('max, min', encoding_indices.max(), encoding_indices.min())
         # input()
-
         state_recs_from_keys = self.rec_net(key_soft_t_emb, timesteps)
 
         # loss: state transmission
         l_s_trans, _ = get_loss(state_trans, states[:, 1:, ...], lengths - 1)
         # loss: state reconstruction
         l_s_recs, _ = get_loss(state_recs_from_keys, states, lengths)
+
         # loss: clustering behind
+        enough_mask = torch.less(w_max, 0.5).to(dtype=torch.float32)
         ls_label_cluster = torch.neg(torch.log(w_max))
         l_label_cluster = ls_label_cluster.mean()
 
@@ -451,7 +502,7 @@ class AutoCoT(pl.LightningModule):
             #     self.key_book.r_p_reset = (l_a_preds_max - l_a_preds) / (l_a_preds_max * self.key_book.n_e)
 
             # need some regulation on the explicit reward (ascent reward, large at switching point)
-            l_policy = l_a_preds + l_s_trans + self.coe_rec * l_s_recs
+            l_policy = l_a_preds + l_s_trans + l_future + self.coe_rec * l_s_recs
             if self.flag_cluster:
                 # reward is the prob of completion
                 # (1.0 - reward) is the prob of un-completion
@@ -464,11 +515,10 @@ class AutoCoT(pl.LightningModule):
                 self.log(name='rt', value=float(self.vq_turn), prog_bar=True, on_step=True, on_epoch=True)
                 # print('after reward_i')
                 reg_r_l2 = (self.key_book.get_r() ** 2).sum()
-
                 l_policy = \
                     l_policy \
                     + 2.0 * self.coe_cluster * (
-                        (ls_label_cluster * cluster_mask).mean()
+                        (ls_label_cluster * cluster_mask * enough_mask).mean()
                         + (torch.neg(torch.log(1.0 - reward)) * cluster_mask).mean()
                         + (torch.neg(torch.log(1.0 - reward_i)) * cluster_mask).mean()
                         + self.vq_coe_r_l1 * reg_r_l2
@@ -540,7 +590,7 @@ class AutoCoT(pl.LightningModule):
 
         self.log_dict(
             {
-                'vg': v_global,
+                'fu': l_future,
                 'ts': l_s_trans,
                 'rs': l_s_recs,
                 '?s': l_s_preds,
@@ -610,6 +660,11 @@ class AutoCoT(pl.LightningModule):
         no_decay_wo_sa.add('rec_net.global_pos_emb')
         no_decay.add('sa_net.local_pos_emb')
         no_decay.add('sa_net.global_pos_emb')
+        if self.future_net is not None:
+            no_decay.add('future_net.local_pos_emb')
+            no_decay.add('future_net.global_pos_emb')
+            no_decay_wo_sa.add('future_net.local_pos_emb')
+            no_decay_wo_sa.add('future_net.global_pos_emb')
 
         # for pn in sorted(list(decay_wo_sa)):
         #     print(pn)
