@@ -1,4 +1,8 @@
+import sys
 import os
+sys.path.append("/home/rzliu/AutoCoT/CoTPC-main")
+sys.path.append("/home/rzliu/AutoCoT/CoTPC-main/data")
+
 import numpy as np
 import argparse
 from tqdm import tqdm
@@ -113,6 +117,7 @@ if __name__ == "__main__":
     action_dim = state_dict_from_ckpt['action_encoder.net.0.weight'].shape[1]
     max_timestep = state_dict_from_ckpt['global_pos_emb'].shape[1]
     print('Loaded ckpt from:', path)
+    print('state_dim', state_dim)
 
     if 'cot' in params['model_type']:
         assert (params['vq_n_e'] != 0) or params['key_states'], 'Should specify --key_states.'
@@ -127,9 +132,6 @@ if __name__ == "__main__":
     else:
         args_key_states, args_key_state_loss = 'a', '0'
     print(args_key_states, args_key_state_loss)
-
-
-
 
     # Load demos to fetch the env. seeds used in training.
     json_path = os.path.join(
@@ -163,7 +165,9 @@ if __name__ == "__main__":
 
     n_env = 25  # Number of parallel environments.
     assert len(eval_ids) % n_env == 0, f'{len(eval_ids)}'
+    print('before get_mp_envs')
     envs = get_mp_envs(args.task, n_env, **env_kwargs)
+    print('after get_mp_envs')
 
     # Load the ckpt after envs init to avoid cuda related errors from ManiSkill2.
     cot_decoder = params['cot_decoder'] if 'cot_decoder' in params else args.cot_decoder

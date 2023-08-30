@@ -457,7 +457,11 @@ class ExplicitSAHNGPT(nn.Module):
 
         # State embeddings & Action embeddings & Key embeddings
         self.state_encoder = MLP(state_dim, config.n_embd, hidden_dims=[256])
-        self.state_grad_encoder = MLP(state_dim, config.n_embd, hidden_dims=[256])
+        self.use_future_state = config.use_future_state
+        if config.use_future_state:
+            self.state_grad_encoder = MLP(state_dim * 2, config.n_embd, hidden_dims=[256])
+        else:
+            self.state_grad_encoder = MLP(state_dim, config.n_embd, hidden_dims=[256])
         self.action_encoder = MLP(action_dim, config.n_embd, hidden_dims=[256])
 
         # embedding dropout
@@ -533,7 +537,7 @@ class ExplicitSAHNGPT(nn.Module):
 
         return r, v_r_norm
 
-    def forward(self, states, timesteps, actions=None, keys=None):
+    def forward(self, states, timesteps, actions=None, keys=None, future_states=None):
         B, T = states.shape[0], states.shape[1]
         states.requires_grad = True
 
@@ -548,7 +552,12 @@ class ExplicitSAHNGPT(nn.Module):
         token_embeddings[:, 0:(T * 3):3, :] = state_embeddings
         if keys is not None:
             # keys should not be None (???????)
-            grad_embeddings = self.state_grad_encoder(states_grad)
+            if self.use_future_state:
+                assert future_states is not None
+                goal_vecs = torch.cat([states_grad, future_states], dim=-1)
+            else:
+                goal_vecs = states_grad
+            grad_embeddings = self.state_grad_encoder(goal_vecs)
             token_embeddings[:, 1:(T * 3):3, :] = grad_embeddings
 
         if actions is not None:
@@ -573,9 +582,6 @@ class ExplicitSAHNGPT(nn.Module):
         action_preds = self.action_predictor(x_action[:, 1:(T * 3):3, :])
         # Use it as ActNet, do action prediction
         return action_preds, r, v_r_norm
-
-
-
 
 
 class ENet(nn.Module):

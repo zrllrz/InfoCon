@@ -321,7 +321,8 @@ if __name__ == "__main__":
             n_layer=params['n_action_layer'],
             n_state_layer=params['n_state_layer'],
             max_timestep=max_timestep,
-            use_skip=params['use_skip']
+            use_skip=params['use_skip'],
+            use_future_state=False if 'use_future_state' not in params.keys() else params['use_future_state']
         )
     elif params['sa_type'] == 'hn':
         sa_config = ExplicitSAHNConfig(
@@ -355,10 +356,10 @@ if __name__ == "__main__":
     )
 
     autocot_model = autocot_model.cuda()
-    autocot_model.load_state_dict(state_dict_from_ckpt, strict=True)
+    autocot_model.load_state_dict(state_dict_from_ckpt, strict=False)
     autocot_model.eval()
 
-    with open(traj_save_keys_path+'/keys-8-27-1.txt', 'w') as fk:
+    with open(traj_save_keys_path+'/keys-8-29-0.txt', 'w') as fk:
         for i_traj in range(length):
             traj_state = dataset['obs'][i_traj]
             traj_action = dataset['actions'][i_traj]

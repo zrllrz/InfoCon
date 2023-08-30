@@ -94,7 +94,7 @@ class ExplicitSAGPTConfig(RootConfig):
 class ExplicitSAHNGPTConfig(RootConfig):
     def __init__(self, n_embd, n_head,
                  attn_pdrop, resid_pdrop, embd_pdrop,
-                 block_size, n_layer, n_state_layer, use_skip, max_timestep):
+                 block_size, n_layer, n_state_layer, use_skip, max_timestep, use_future_state=False):
         self.type = 'egpthn'
         super().__init__(
             n_embd, n_head,
@@ -103,6 +103,7 @@ class ExplicitSAHNGPTConfig(RootConfig):
         )
         self.n_state_layer = n_state_layer
         self.use_skip = use_skip
+        self.use_future_state = use_future_state
 
 
 class ENetConfig(RootConfig):
@@ -170,7 +171,9 @@ class AutoCoT(pl.LightningModule):
         e_dim=-1,
         vq_t_emb_rate=2.0,
         vq_coe_r_l1=0.0,
-        vq_use_clip_decrease_r=False
+        vq_use_prob_sel_train=False,
+        vq_use_timestep_appeal=False,
+        task=''
     ):
         super().__init__()
 
@@ -289,7 +292,8 @@ class AutoCoT(pl.LightningModule):
             use_ema=True,
             coe_ema=vq_coe_ema,
             t_emb_rate=vq_t_emb_rate,
-            use_clip_decrease_r=vq_use_clip_decrease_r
+            use_prob_sel_train=vq_use_prob_sel_train,
+            use_timestep_appeal=vq_use_timestep_appeal
         )
         self.vq_coe_r_l1 = vq_coe_r_l1
 
@@ -307,9 +311,11 @@ class AutoCoT(pl.LightningModule):
         if optimizers_config is not None:
             self.coe_cluster = optimizers_config['coe_cluster']
             self.coe_rec = optimizers_config['coe_rec']
+            self.use_decay_mask_rate = False if 'use_decay_mask_rate' not in optimizers_config.keys() else optimizers_config['use_decay_mask_rate']
         else:
             self.coe_cluster = 0.0
             self.coe_rec = 0.0
+            self.use_decay_mask_rate = False
 
         self.step = 0
         self.step_cluster = 0
@@ -320,6 +326,7 @@ class AutoCoT(pl.LightningModule):
         self.progress_bar_step = 0.0
 
         self.automatic_optimization = False
+        self.mytask = task
 
     def mask_cluster_rate(self):
         # calculate the mask off rate of cluster according to action prediction behavior
@@ -341,6 +348,7 @@ class AutoCoT(pl.LightningModule):
 
     def statistic_indices(self, indices, unified_t=None):
         # (B, T)
+        print(self.mytask)
         if unified_t is None:
             table = torch.zeros(size=(indices.shape[0], self.key_book.n_e))  # (B, n_e)
             for i in range(self.key_book.n_e):
@@ -356,10 +364,8 @@ class AutoCoT(pl.LightningModule):
                     table[i, j] = ((indices == j).to(torch.int) * mask_t).sum()
             torch.set_printoptions(precision=8, sci_mode=False)
             print(table)
-            print(torch.div(F.sigmoid(self.key_book.t_keys.weight.data), self.key_book.n_e).squeeze(-1)
-                  + self.key_book.t_base.squeeze(-1))
+            print(self.key_book.t_keys.weight.data.squeeze(-1))
             print(self.key_book.get_r().squeeze(-1))
-            print(self.key_book.r_p_reset)
 
     def loss_reward(self, states, indices):
         # indices (B, T) choice of index of this batch
@@ -368,17 +374,8 @@ class AutoCoT(pl.LightningModule):
         assert self.sa_type == 'egpt' or self.sa_type == 'egpthn'
         for di in range(self.key_book.n_e):
             self.vq_turn = ((self.vq_turn + 1) % self.key_book.n_e)
-            # print('indices', indices)
-            # print('self.vq_turn', self.vq_turn)
-            # input()
-            # print('indices', indices)
-            # print('indices.shape', indices.shape)
-            # input()
             mask_i = torch.eq(indices, self.vq_turn)
-            # print(mask_i)
-            # input()
             n_i = mask_i.sum()
-            # print('n_i', n_i)
             if n_i != 0:
                 # update the reward function of this part
                 key_same_i = self.key_book.vparams(torch.tensor([[self.vq_turn]], device=states.device))
@@ -387,7 +384,6 @@ class AutoCoT(pl.LightningModule):
                 reward_i, _ = self.sa_net.get_reward(states, key_same_i)
                 reward_i = torch.where(mask_i, reward_i, 1.0 - reward_i)  # other should be different
                 return reward_i
-                # return torch.zeros_like(indices, dtype=torch.float32, device=states.device)
 
         print('in autocot method: loss_reward: should not reach here!')
         assert False
@@ -422,28 +418,16 @@ class AutoCoT(pl.LightningModule):
         # first forward, use policy and implicit energy to adjust key_soft, key_book #
         ##############################################################################
         key_soft, state_trans = self.key_net(states, timesteps, actions)
-        encoding_indices, key_hard, vparams_w, vparams_hard, w_max, score_ksh, key_soft_t_emb = \
+        encoding_indices, key_hard, vparams_w, vparams_hard, w_max, w_cnt, key_soft_t_emb = \
             self.key_book(key_soft, unified_t)
 
         if self.future_net is not None:
-            # keys_norm = self.key_book.get_keys() * self.key_book.get_r()
-            # keys_norm = \
-            #     keys_norm[encoding_indices.view(-1)].view(encoding_indices.shape[0], encoding_indices.shape[1], -1)
-            # # don't forget to store gradient!
-            # keys_norm = \
-            #     F.normalize(key_soft, p=2.0, dim=-1) \
-            #     + (keys_norm - F.normalize(key_soft, p=2.0, dim=-1)).detach()
             state_future_preds = self.future_net(states, timesteps, actions, keys=key_hard)
             state_future = self.get_future_state(states, encoding_indices)
             l_future, _ = get_loss(state_future_preds, state_future, lengths)
         else:
             l_future = 0.0
-        # print('just after book')
-        # input()
-        # print('encoding_indices', encoding_indices)
-        # print('encoding_indices.shape', encoding_indices.shape)
-        # print('max, min', encoding_indices.max(), encoding_indices.min())
-        # input()
+            state_future = None
         state_recs_from_keys = self.rec_net(key_soft_t_emb, timesteps)
 
         # loss: state transmission
@@ -453,6 +437,7 @@ class AutoCoT(pl.LightningModule):
 
         # loss: clustering behind
         enough_mask = torch.less(w_max, 0.5).to(dtype=torch.float32)
+        # print('w_cnt.shape', w_cnt.shape)
         ls_label_cluster = torch.neg(torch.log(w_max))
         l_label_cluster = ls_label_cluster.mean()
 
@@ -473,25 +458,25 @@ class AutoCoT(pl.LightningModule):
             l_policy = l_a_preds + l_s_trans + self.coe_rec * l_s_recs
 
         elif self.sa_type == 'egpt' or self.sa_type == 'egpthn':
-            action_preds, reward, v_r_norm = self.sa_net(states, timesteps, actions=actions, keys=vparams_hard)
+            action_preds, reward, v_r_norm = self.sa_net(states, timesteps, actions=actions, keys=vparams_hard, future_states=state_future)
 
             # loss: state prediction & action prediction
             l_s_preds = 0.0
             l_a_preds, ls_a_preds = get_loss(action_preds, actions, lengths)
 
             # select a part of action prediction, only update a part of clustering related loss according to it
-            ls_a_preds_flattened = ls_a_preds.view(-1)
-            mask_cluster_rate = self.mask_cluster_rate()
-            _, cluster_mask_index = \
-                torch.topk(ls_a_preds_flattened, k=int(mask_cluster_rate*ls_a_preds_flattened.shape[0]))
-            cluster_mask_flattened = torch.ones_like(ls_a_preds_flattened, dtype=torch.float32)
-            # print('cluster_mask_flattened.shape', cluster_mask_flattened.shape)
-            # input()
-            # print('cluster_mask_index.shape', cluster_mask_index.shape)
-            # input()
-            cluster_mask_flattened[cluster_mask_index] = 0.0
+            if self.use_decay_mask_rate:
+                ls_a_preds_flattened = ls_a_preds.view(-1)
+                mask_cluster_rate = self.mask_cluster_rate()
+                _, cluster_mask_index = \
+                    torch.topk(ls_a_preds_flattened, k=int(mask_cluster_rate*ls_a_preds_flattened.shape[0]))
+                cluster_mask_flattened = torch.ones_like(ls_a_preds_flattened, dtype=torch.float32)
+                cluster_mask_flattened[cluster_mask_index] = 0.0
+                cluster_mask = cluster_mask_flattened.reshape(ls_a_preds.shape)
+            else:
+                mask_cluster_rate = 0.0
+                cluster_mask = None
 
-            cluster_mask = cluster_mask_flattened.reshape(ls_a_preds.shape)
             self.log(name='cm', value=mask_cluster_rate, prog_bar=True, on_step=True, on_epoch=True)
             # print('rate mask', cluster_mask.sum().item() / ls_a_preds_flattened.shape[0])
             # print('cluster_mask.shape', cluster_mask.shape)
@@ -513,14 +498,28 @@ class AutoCoT(pl.LightningModule):
                 # print('encoding_indices', encoding_indices)
                 reward_i = self.loss_reward(states, indices=encoding_indices)
                 self.log(name='rt', value=float(self.vq_turn), prog_bar=True, on_step=True, on_epoch=True)
-                # print('after reward_i')
                 reg_r_l2 = (self.key_book.get_r() ** 2).sum()
+
+                ls_label_cluster_masked = ls_label_cluster * enough_mask
+                if self.use_decay_mask_rate:
+                    print('use_decay_mask_rate')
+                    ls_label_cluster_masked = ls_label_cluster_masked * cluster_mask
+                ls_label_cluster_weighed = ls_label_cluster_masked * w_cnt
+
+                ls_reward = torch.neg(torch.log(1.0 - reward))
+                ls_reward_i = torch.neg(torch.log(1.0 - reward_i))
+                if self.use_decay_mask_rate:
+                    print('use_decay_mask_rate')
+                    ls_reward = ls_reward * cluster_mask
+                    ls_reward_i = ls_reward_i * cluster_mask
+                ls_reward_weighed = ls_reward * w_cnt
+
                 l_policy = \
                     l_policy \
                     + 2.0 * self.coe_cluster * (
-                        (ls_label_cluster * cluster_mask * enough_mask).mean()
-                        + (torch.neg(torch.log(1.0 - reward)) * cluster_mask).mean()
-                        + (torch.neg(torch.log(1.0 - reward_i)) * cluster_mask).mean()
+                        torch.div(ls_label_cluster_weighed.sum(), self.key_book.n_e)
+                        + torch.div(ls_reward_weighed.sum(), self.key_book.n_e)
+                        + ls_reward_i.mean()
                         + self.vq_coe_r_l1 * reg_r_l2
                     )
 

@@ -76,11 +76,15 @@ def parse_args():
                         help="division rate for time sphere embedding")
     parser.add_argument("--vq_coe_r_l1", default='0.0', type=str,
                         help="l1 regularization on length of every prototype")
-    parser.add_argument("--vq_use_clip_decrease_r", action='store_true',
-                        help="Flag for using clipping when r is decreasing during training")
+    parser.add_argument("--vq_use_prob_sel_train", action='store_true',
+                        help="If true, using prob sample when training")
+    parser.add_argument("--vq_use_timestep_appeal", action='store_true',
+                        help="If true, prototype will move close to time in time interval")
 
     parser.add_argument("--coe_cluster", default='0.1', type=str, help="cluster weight")
     parser.add_argument("--coe_rec", default='1.0', type=str, help="reconstruction weight from key_soft")
+    parser.add_argument("--use_decay_mask_rate", action='store_true',
+                        help="mask cluster item when it's policy is too large")
 
     parser.add_argument("--sa_type", default='gpt', type=str, choices=['gpt', 'egpt', 'egpthn', 'resfc', 'hn'],
                         help="type of sa_net")
@@ -92,6 +96,8 @@ def parse_args():
                         help="if True, use key energy gradient to evaluate effect of key states, only use when resfc")
     parser.add_argument("--use_skip", action='store_true',
                         help="if True, use skip connection for HN generated net when using HN")
+    parser.add_argument("--use_future_state", action='store_true',
+                        help="if True, we will append the future states back to ")
 
     # General hyper-parameters regarding module loading and saving
     parser.add_argument("--model_name", default='TEST', type=str, help="Model name (for storing ckpts).")
@@ -137,14 +143,14 @@ if __name__ == "__main__":
         + 'k' + str(args.n_key_layer) \
         + '-r' + str(args.n_rec_layer) \
         + (('-f' + str(args.n_future_layer)) if args.n_future_layer != 0 else '') \
-        + '-c' + str(args.vq_n_e) \
+        + '-c' + str(args.vq_n_e) + ('-use_prob_sel_train' if args.vq_use_prob_sel_train else '') + ('-use_timestep_appeal' if args.vq_use_timestep_appeal else '')\
         + '_KT' + args.KT + '_EMA' + args.vq_coe_ema + '_temb' + args.vq_t_emb_rate \
-        + ('-clip_r' if args.vq_use_clip_decrease_r else '') + '-r_l1' + args.vq_coe_r_l1 \
-        + '-' + args.sa_type + '_s' + str(args.n_state_layer) + '_a' + str(args.n_action_layer) \
+        + '-r_l1' + args.vq_coe_r_l1 \
+        + '-' + args.sa_type + '_s' + str(args.n_state_layer) + '_a' + str(args.n_action_layer) + ('-use_future_state' if args.use_future_state else '') \
         + '-emb' + str(args.n_embd) \
         + '-key' + str(args.dim_key) \
         + '-e' + str(args.dim_e) \
-        + '-cluster' + args.coe_cluster + '-rec' + args.coe_rec \
+        + '-cluster' + args.coe_cluster + '-rec' + args.coe_rec + ('-use_decay_mask_rate' if args.use_decay_mask_rate else '') \
 
     # + '-ss' + args.c_ss + '-sh' + args.c_sh + '-hs' + args.c_hs + '-hh' + args.c_hh \
 
@@ -253,7 +259,8 @@ if __name__ == "__main__":
             n_layer=args.n_action_layer,
             n_state_layer=args.n_state_layer,
             use_skip=args.use_skip,
-            max_timestep=train_dataset.max_steps
+            max_timestep=train_dataset.max_steps,
+            use_future_state=args.use_future_state
         )
     elif args.sa_type == 'hn':
         sa_config = ExplicitSAHNConfig(
@@ -274,7 +281,8 @@ if __name__ == "__main__":
         'beta1': float(args.beta1),
         'beta2': float(args.beta2),
         'coe_cluster': float(args.coe_cluster),
-        'coe_rec': float(args.coe_rec)
+        'coe_rec': float(args.coe_rec),
+        'use_decay_mask_rate': args.use_decay_mask_rate
     }
     assert args.lr_schedule in ['cos_decay_with_warmup', 'multistep', None], 'Unknown lr scheduler'
     if args.lr_schedule == 'cos_decay_with_warmup':
@@ -292,11 +300,11 @@ if __name__ == "__main__":
     else:
         scheduler_config = None
 
-    if args.vq_use_clip_decrease_r:
-        # calculate the bound
-        vq_bound_clip_decrease_r = (0.999 - 0.001) / (args.n_iters / (len(train_dataset) / args.batch_size))
-    else:
-        vq_bound_clip_decrease_r = None
+    # if args.vq_use_clip_decrease_r:
+    #     # calculate the bound
+    #     vq_bound_clip_decrease_r = (0.999 - 0.001) / (args.n_iters / (len(train_dataset) / args.batch_size))
+    # else:
+    #     vq_bound_clip_decrease_r = None
 
     autocot_model = AutoCoT(
         key_config=key_config,
@@ -314,7 +322,9 @@ if __name__ == "__main__":
         e_dim=args.dim_e,
         vq_t_emb_rate=float(args.vq_t_emb_rate),
         vq_coe_r_l1=float(args.vq_coe_r_l1),
-        vq_use_clip_decrease_r=args.vq_use_clip_decrease_r
+        vq_use_prob_sel_train=args.vq_use_prob_sel_train,
+        vq_use_timestep_appeal=args.vq_use_timestep_appeal,
+        task=args.task
     )
 
     # autocot_model.configure_optimizers()
