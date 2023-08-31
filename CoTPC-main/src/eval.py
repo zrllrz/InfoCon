@@ -163,7 +163,7 @@ if __name__ == "__main__":
         eval_ids = np.random.permutation(
             len(json_data["episodes"]))[:params['num_traj']][:500]
 
-    n_env = 25  # Number of parallel environments.
+    n_env = 1  # Number of parallel environments.
     assert len(eval_ids) % n_env == 0, f'{len(eval_ids)}'
     print('before get_mp_envs')
     envs = get_mp_envs(args.task, n_env, **env_kwargs)

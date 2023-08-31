@@ -169,7 +169,9 @@ class AutoCoT(pl.LightningModule):
         action_dim=-1,
         key_dim=-1,
         e_dim=-1,
-        vq_t_emb_rate=2.0,
+        vq_use_ft_emb=False,
+        vq_use_st_emb=False,
+        vq_st_emb_rate=2.0,
         vq_coe_r_l1=0.0,
         vq_use_prob_sel_train=False,
         vq_use_timestep_appeal=False,
@@ -194,31 +196,8 @@ class AutoCoT(pl.LightningModule):
         self.rec_net = RecNet(
             config=rec_config,
             state_dim=state_dim,
-            key_dim=key_dim+1
+            key_dim=key_dim+vq_use_st_emb
         )
-
-        # print('block size =', key_config.block_size)
-        # block_size = key_config.block_size
-
-        # # mask for key soft time-steps constraint
-        # check_mask_base = 1 - torch.tril(torch.ones(block_size, block_size))
-        # check_mask_sum = torch.cumsum(check_mask_base, dim=-1)
-        # check_mask_0 = ((check_mask_sum % 2 == 1) * check_mask_base).to(dtype=torch.float32)
-        # check_mask_1 = ((check_mask_sum % 2 == 0) * check_mask_base).to(dtype=torch.float32)
-        # check_mask_0 = check_mask_0[:-1, 1:]
-        # check_mask_1 = check_mask_1[:-1, 1:]
-        # print('check_mask_0 =\n', check_mask_0)
-        # print('check_mask_1 =\n', check_mask_1)
-        # self.register_buffer('cm', torch.stack([check_mask_0, check_mask_1], dim=0))
-
-        # mask for clustering between key_soft
-        # arange = torch.arange(block_size, dtype=torch.float32)
-        # hm_dis = torch.abs(arange.view(-1, 1) - arange)
-        # hm_dis = torch.neg(hm_dis - torch.ones_like(hm_dis))
-        # hm_dis[[i for i in range(block_size)], [i for i in range(block_size)]] = float('-inf')
-        # w_ss = torch.pow(2.0, hm_dis * (vq_n_e - 2) / (block_size - 2))
-        # print('w_ss =\n', w_ss)
-        # self.register_buffer('w_ss', w_ss)
 
         # sa_net, for action, next_state prediction to eval the hard key
         if future_config is None:
@@ -228,46 +207,22 @@ class AutoCoT(pl.LightningModule):
                 config=future_config,
                 state_dim=state_dim,
                 action_dim=action_dim,
-                key_dim=key_dim+1
+                key_dim=key_dim+vq_use_st_emb
             )
 
         self.sa_type = sa_config.type
         if sa_config.type == 'resfc':
             print('do not use it')
             assert False
-            # self.sa_net = ImplicitSAResFC(
-            #     config=sa_config,
-            #     state_dim=state_dim,
-            #     action_dim=action_dim,
-            #     key_dim=e_dim
-            # )
         elif sa_config.type == 'gpt':
             print('do not use it')
             assert False
-            # self.sa_net = ImplicitSAGPT(
-            #     config=sa_config,
-            #     state_dim=state_dim,
-            #     action_dim=action_dim,
-            #     key_dim=e_dim
-            # )
         elif sa_config.type == 'hn':
             print('do not use it')
             assert False
-            # self.sa_net = ExplicitSAHN(
-            #     config=sa_config,
-            #     state_dim=state_dim,
-            #     action_dim=action_dim,
-            #     e_dim=e_dim * sa_config.reward_layer
-            # )
         elif sa_config.type == 'egpt':
             print('do not use it')
             assert False
-            # self.sa_net = ExplicitSAGPT(
-            #     config=sa_config,
-            #     state_dim=state_dim,
-            #     action_dim=action_dim,
-            #     key_dim=e_dim
-            # )
         elif sa_config.type == 'egpthn':
             self.sa_net = ExplicitSAHNGPT(
                 config=sa_config,
@@ -291,7 +246,9 @@ class AutoCoT(pl.LightningModule):
             KT=KT,
             use_ema=True,
             coe_ema=vq_coe_ema,
-            t_emb_rate=vq_t_emb_rate,
+            use_ft_emb=vq_use_ft_emb,
+            use_st_emb=vq_use_st_emb,
+            t_emb_rate=vq_st_emb_rate,
             use_prob_sel_train=vq_use_prob_sel_train,
             use_timestep_appeal=vq_use_timestep_appeal
         )
@@ -331,7 +288,7 @@ class AutoCoT(pl.LightningModule):
     def mask_cluster_rate(self):
         # calculate the mask off rate of cluster according to action prediction behavior
         # return a fp between [0, 1], meaning the proportion of mask off clustering place
-        return (0.5 + cos(self.progress_bar_step * pi) * 0.5) ** 2
+        return (0.5 + cos(self.progress_bar_step * pi) * 0.5) ** 10
 
     def on_train_batch_start(self, batch, batch_idx):
         max_steps = self.trainer.max_steps
@@ -379,7 +336,7 @@ class AutoCoT(pl.LightningModule):
             if n_i != 0:
                 # update the reward function of this part
                 key_same_i = self.key_book.vparams(torch.tensor([[self.vq_turn]], device=states.device))
-                key_same_i = F.normalize(key_same_i, p=2.0, dim=-1)
+                key_same_i = self.key_book.split_vparams_norm(key_same_i)
                 key_same_i = key_same_i.repeat(B, T, 1)
                 reward_i, _ = self.sa_net.get_reward(states, key_same_i)
                 reward_i = torch.where(mask_i, reward_i, 1.0 - reward_i)  # other should be different
@@ -436,100 +393,140 @@ class AutoCoT(pl.LightningModule):
         l_s_recs, _ = get_loss(state_recs_from_keys, states, lengths)
 
         # loss: clustering behind
-        enough_mask = torch.less(w_max, 0.5).to(dtype=torch.float32)
+        mask_cluster_rate = self.mask_cluster_rate()
+        enough_mask = torch.less(w_max, 0.5 + 0.5 * (1.0 - mask_cluster_rate)).to(dtype=torch.float32)
         # print('w_cnt.shape', w_cnt.shape)
         ls_label_cluster = torch.neg(torch.log(w_max))
         l_label_cluster = ls_label_cluster.mean()
 
         # loss_key_soft_adj = 0.0
+        assert self.sa_type == 'egpthn'
+        action_preds, reward, v_r_norm = self.sa_net(states, timesteps, actions=actions, keys=vparams_hard,
+                                                     future_states=state_future)
 
-        if self.sa_type == 'hn':
-            # currently hyper net implementation only have
-            action_preds = self.sa_net(states, timesteps, keys=vparams_hard)
+        # loss: state prediction & action prediction
+        l_s_preds = 0.0
+        l_a_preds, ls_a_preds = get_loss(action_preds, actions, lengths)
 
-            # loss: state prediction & action prediction
-            l_s_preds = 0.0
-            l_a_preds, _ = get_loss(action_preds, actions, lengths)
-
-            # need some regulation on the explicit reward (ascent reward, large at switching point)
-            #######
-            # ??? #
-            #######
-            l_policy = l_a_preds + l_s_trans + self.coe_rec * l_s_recs
-
-        elif self.sa_type == 'egpt' or self.sa_type == 'egpthn':
-            action_preds, reward, v_r_norm = self.sa_net(states, timesteps, actions=actions, keys=vparams_hard, future_states=state_future)
-
-            # loss: state prediction & action prediction
-            l_s_preds = 0.0
-            l_a_preds, ls_a_preds = get_loss(action_preds, actions, lengths)
-
-            # select a part of action prediction, only update a part of clustering related loss according to it
-            if self.use_decay_mask_rate:
-                ls_a_preds_flattened = ls_a_preds.view(-1)
-                mask_cluster_rate = self.mask_cluster_rate()
-                _, cluster_mask_index = \
-                    torch.topk(ls_a_preds_flattened, k=int(mask_cluster_rate*ls_a_preds_flattened.shape[0]))
-                cluster_mask_flattened = torch.ones_like(ls_a_preds_flattened, dtype=torch.float32)
-                cluster_mask_flattened[cluster_mask_index] = 0.0
-                cluster_mask = cluster_mask_flattened.reshape(ls_a_preds.shape)
-            else:
-                mask_cluster_rate = 0.0
-                cluster_mask = None
-
-            self.log(name='cm', value=mask_cluster_rate, prog_bar=True, on_step=True, on_epoch=True)
-            # print('rate mask', cluster_mask.sum().item() / ls_a_preds_flattened.shape[0])
-            # print('cluster_mask.shape', cluster_mask.shape)
-            # input()
-
-            # l_a_preds_max = torch.max(ls_a_preds)
-            # with torch.no_grad():
-            #     self.key_book.r_p_reset = (l_a_preds_max - l_a_preds) / (l_a_preds_max * self.key_book.n_e)
-
-            # need some regulation on the explicit reward (ascent reward, large at switching point)
-            l_policy = l_a_preds + l_s_trans + l_future + self.coe_rec * l_s_recs
-            if self.flag_cluster:
-                # reward is the prob of completion
-                # (1.0 - reward) is the prob of un-completion
-                # log(1.0 - reward) should be as large as possible
-                # minimize -log(1.0 - reward)
-                # also we need to update one set of classifier during onr iteration
-                # print('before reward_i')
-                # print('encoding_indices', encoding_indices)
-                reward_i = self.loss_reward(states, indices=encoding_indices)
-                self.log(name='rt', value=float(self.vq_turn), prog_bar=True, on_step=True, on_epoch=True)
-                reg_r_l2 = (self.key_book.get_r() ** 2).sum()
-
-                ls_label_cluster_masked = ls_label_cluster * enough_mask
-                if self.use_decay_mask_rate:
-                    print('use_decay_mask_rate')
-                    ls_label_cluster_masked = ls_label_cluster_masked * cluster_mask
-                ls_label_cluster_weighed = ls_label_cluster_masked * w_cnt
-
-                ls_reward = torch.neg(torch.log(1.0 - reward))
-                ls_reward_i = torch.neg(torch.log(1.0 - reward_i))
-                if self.use_decay_mask_rate:
-                    print('use_decay_mask_rate')
-                    ls_reward = ls_reward * cluster_mask
-                    ls_reward_i = ls_reward_i * cluster_mask
-                ls_reward_weighed = ls_reward * w_cnt
-
-                l_policy = \
-                    l_policy \
-                    + 2.0 * self.coe_cluster * (
-                        torch.div(ls_label_cluster_weighed.sum(), self.key_book.n_e)
-                        + torch.div(ls_reward_weighed.sum(), self.key_book.n_e)
-                        + ls_reward_i.mean()
-                        + self.vq_coe_r_l1 * reg_r_l2
-                    )
-
+        # select a part of action prediction, only update a part of clustering related loss according to it
+        if self.use_decay_mask_rate:
+            ls_a_preds_flattened = ls_a_preds.view(-1)
+            _, cluster_mask_index = \
+                torch.topk(ls_a_preds_flattened, k=int(mask_cluster_rate * ls_a_preds_flattened.shape[0]))
+            cluster_mask_flattened = torch.ones_like(ls_a_preds_flattened, dtype=torch.float32)
+            cluster_mask_flattened[cluster_mask_index] = 0.0
+            cluster_mask = cluster_mask_flattened.reshape(ls_a_preds.shape)
         else:
-            action_preds, state_preds = self.sa_net(states, timesteps, keys=vparams_hard, predict_state=True)
+            mask_cluster_rate = 0.0
+            cluster_mask = None
 
-            # loss: state prediction & action prediction
-            l_s_preds, _ = get_loss(state_preds[:, :-1, ...], states[:, 1:, ...], lengths - 1)
-            l_a_preds, _ = get_loss(action_preds, actions, lengths)
-            l_policy = l_s_preds + l_a_preds + l_s_trans + self.coe_rec * l_s_recs
+        self.log(name='cm', value=mask_cluster_rate, prog_bar=True, on_step=True, on_epoch=True)
+        # print('rate mask', cluster_mask.sum().item() / ls_a_preds_flattened.shape[0])
+        # print('cluster_mask.shape', cluster_mask.shape)
+        # input()
+
+        # l_a_preds_max = torch.max(ls_a_preds)
+        # with torch.no_grad():
+        #     self.key_book.r_p_reset = (l_a_preds_max - l_a_preds) / (l_a_preds_max * self.key_book.n_e)
+
+        # need some regulation on the explicit reward (ascent reward, large at switching point)
+        l_policy = l_a_preds + l_s_trans + l_future + self.coe_rec * l_s_recs
+        if self.flag_cluster:
+            # reward is the prob of completion
+            # (1.0 - reward) is the prob of un-completion
+            # log(1.0 - reward) should be as large as possible
+            # minimize -log(1.0 - reward)
+            # also we need to update one set of classifier during onr iteration
+            # print('before reward_i')
+            # print('encoding_indices', encoding_indices)
+            reward_i = self.loss_reward(states, indices=encoding_indices)
+            self.log(name='rt', value=float(self.vq_turn), prog_bar=True, on_step=True, on_epoch=True)
+            reg_r_l2 = (self.key_book.get_r() ** 2).sum()
+
+            ls_label_cluster_masked = ls_label_cluster * enough_mask
+            if self.use_decay_mask_rate:
+                ls_label_cluster_masked = ls_label_cluster_masked * cluster_mask
+            ls_label_cluster_weighed = ls_label_cluster_masked * w_cnt
+
+            ls_reward = torch.neg(torch.log(1.0 - reward))
+            ls_reward_i = torch.neg(torch.log(1.0 - reward_i))
+            if self.use_decay_mask_rate:
+                ls_reward = ls_reward * cluster_mask
+                ls_reward_i = ls_reward_i * cluster_mask
+            ls_reward_weighed = ls_reward * w_cnt
+
+            l_policy = \
+                l_policy \
+                + 2.0 * self.coe_cluster * (
+                    torch.div(ls_label_cluster_weighed.sum(), self.key_book.n_e)
+                    + torch.div(ls_reward_weighed.sum(), self.key_book.n_e)
+                    + ls_reward_i.mean()
+                    + self.vq_coe_r_l1 * reg_r_l2
+                )
+
+        # elif self.sa_type == 'egpt' or self.sa_type == 'egpthn':
+        #     action_preds, reward, v_r_norm = self.sa_net(states, timesteps, actions=actions, keys=vparams_hard, future_states=state_future)
+        #
+        #     # loss: state prediction & action prediction
+        #     l_s_preds = 0.0
+        #     l_a_preds, ls_a_preds = get_loss(action_preds, actions, lengths)
+        #
+        #     # select a part of action prediction, only update a part of clustering related loss according to it
+        #     if self.use_decay_mask_rate:
+        #         ls_a_preds_flattened = ls_a_preds.view(-1)
+        #         mask_cluster_rate = self.mask_cluster_rate()
+        #         _, cluster_mask_index = \
+        #             torch.topk(ls_a_preds_flattened, k=int(mask_cluster_rate*ls_a_preds_flattened.shape[0]))
+        #         cluster_mask_flattened = torch.ones_like(ls_a_preds_flattened, dtype=torch.float32)
+        #         cluster_mask_flattened[cluster_mask_index] = 0.0
+        #         cluster_mask = cluster_mask_flattened.reshape(ls_a_preds.shape)
+        #     else:
+        #         mask_cluster_rate = 0.0
+        #         cluster_mask = None
+        #
+        #     self.log(name='cm', value=mask_cluster_rate, prog_bar=True, on_step=True, on_epoch=True)
+        #     # print('rate mask', cluster_mask.sum().item() / ls_a_preds_flattened.shape[0])
+        #     # print('cluster_mask.shape', cluster_mask.shape)
+        #     # input()
+        #
+        #     # l_a_preds_max = torch.max(ls_a_preds)
+        #     # with torch.no_grad():
+        #     #     self.key_book.r_p_reset = (l_a_preds_max - l_a_preds) / (l_a_preds_max * self.key_book.n_e)
+        #
+        #     # need some regulation on the explicit reward (ascent reward, large at switching point)
+        #     l_policy = l_a_preds + l_s_trans + l_future + self.coe_rec * l_s_recs
+        #     if self.flag_cluster:
+        #         # reward is the prob of completion
+        #         # (1.0 - reward) is the prob of un-completion
+        #         # log(1.0 - reward) should be as large as possible
+        #         # minimize -log(1.0 - reward)
+        #         # also we need to update one set of classifier during onr iteration
+        #         # print('before reward_i')
+        #         # print('encoding_indices', encoding_indices)
+        #         reward_i = self.loss_reward(states, indices=encoding_indices)
+        #         self.log(name='rt', value=float(self.vq_turn), prog_bar=True, on_step=True, on_epoch=True)
+        #         reg_r_l2 = (self.key_book.get_r() ** 2).sum()
+        #
+        #         ls_label_cluster_masked = ls_label_cluster * enough_mask
+        #         if self.use_decay_mask_rate:
+        #             ls_label_cluster_masked = ls_label_cluster_masked * cluster_mask
+        #         ls_label_cluster_weighed = ls_label_cluster_masked * w_cnt
+        #
+        #         ls_reward = torch.neg(torch.log(1.0 - reward))
+        #         ls_reward_i = torch.neg(torch.log(1.0 - reward_i))
+        #         if self.use_decay_mask_rate:
+        #             ls_reward = ls_reward * cluster_mask
+        #             ls_reward_i = ls_reward_i * cluster_mask
+        #         ls_reward_weighed = ls_reward * w_cnt
+        #
+        #         l_policy = \
+        #             l_policy \
+        #             + 2.0 * self.coe_cluster * (
+        #                 torch.div(ls_label_cluster_weighed.sum(), self.key_book.n_e)
+        #                 + torch.div(ls_reward_weighed.sum(), self.key_book.n_e)
+        #                 + ls_reward_i.mean()
+        #                 + self.vq_coe_r_l1 * reg_r_l2
+        #             )
 
         opt_policy.zero_grad()
         self.manual_backward(l_policy)
@@ -638,6 +635,7 @@ class AutoCoT(pl.LightningModule):
                     if not fpn.startswith('sa_net'):
                         no_decay_wo_sa.add(fpn)
                 elif pn.endswith('weight') and isinstance(m, whitelist_weight_modules):
+                    print(fpn)
                     decay.add(fpn)
                     if not fpn.startswith('sa_net'):
                         decay_wo_sa.add(fpn)

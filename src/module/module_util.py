@@ -32,19 +32,25 @@ class unifiedTime(nn.Module):
 
 
 class FreqEncoder(nn.Module):
-    def __init__(self, length=32):
+    def __init__(self, half_t_size, feature_size):
         super().__init__()
+        self.feature_size = feature_size
 
-        self.length = length
-        coe_freq = torch.remainder(torch.arange(length), 32)
+        self.out_linear = nn.Linear(half_t_size * 2, feature_size)
+        self.out_linear.weight.data.normal_(mean=0.0, std=0.02)
+        self.out_linear.bias.data.zero_()
+
+        coe_freq = torch.arange(half_t_size)
         coe_freq = torch.mul(torch.pow(2.0, coe_freq), torch.pi)
         self.register_buffer('coe_freq', coe_freq.unsqueeze(0))
 
-    def forward(self, unified_t):
+    def forward(self, feature, unified_t):
         u_t = torch.mul(torch.sub(torch.mul(unified_t, 2.0), 1.0), torch.pi).unsqueeze(-1)
-        emb_cos = torch.cos(u_t @ self.coe_freq)
+        emb_cos = torch.cos(u_t @ self.coe_freq)  # ()
         emb_sin = torch.sin(u_t @ self.coe_freq)
-        emb_t = torch.cat([emb_cos, emb_sin], dim=-1)
+        emb_t = torch.cat([emb_cos, emb_sin], dim=-1)  # (..., 2 * half_t_size)
+        emb_t = F.normalize(self.out_linear(emb_t), p=2.0, dim=-1)  # (..., feature_size)
+        emb_t = F.normalize(emb_t + feature, p=2.0, dim=-1)  # feature should be normalized...
         return emb_t
 
 

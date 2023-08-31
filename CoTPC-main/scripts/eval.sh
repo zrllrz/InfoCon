@@ -2,9 +2,10 @@
 
 cd ../src &&
 
-CUDA_VISIBLE_DEVICES=7 python eval.py --eval_max_steps=200 \
-    --from_ckpt=1_640_000 --task=StackCube-v0 \
-    --model_name=StackCube-v0-8-27
+CUDA_VISIBLE_DEVICES=5 python eval.py --eval_max_steps=200 \
+    --from_ckpt=1 --task=TurnFaucet-v0 \
+    --model_name=TF-v0-8-29-0 \
+
 
 #           PegInsertionSide          StackCube                 TurnFaucet                PickCube
 # ITER      TRAIN SUCC  TEST SUCC     TRAIN SUCC  TEST SUCC     TRAIN SUCC  TEST SUCC     TRAIN SUCC  TEST SUCC

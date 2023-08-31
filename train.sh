@@ -4,16 +4,16 @@ cd src &&
 
 # Example script for PickCube training (with a good set of hyper-parameters).
 # --model_name=independent-sin_k-lay_3-10_cod-smo_None-sub \
-CUDA_VISIBLE_DEVICES=4 python train.py \
-    --n_iters=505_101 --batch_size=256 \
+CUDA_VISIBLE_DEVICES=5 python train.py \
+    --n_iters=202_101 --batch_size=256 \
     --init_lr=5e-4 --weight_decay=0.001 --lr_schedule=cos_decay_with_warmup --t_warmup=1000 \
     --beta1=0.9 --beta2=0.95 --coe_cluster=0.001 --coe_rec=1.0 \
     --dropout=0.0 --n_head=8 --n_embd=128 --dim_key=128 --dim_e=128 \
-    --n_key_layer=4 --n_rec_layer=4 --n_future_layer=1 \
-    --vq_n_e=10 --vq_coe_ema=0.95 --KT=0.1 --vq_t_emb_rate=1.2 --vq_coe_r_l1=0.0 \
+    --n_key_layer=4 --n_rec_layer=4 --n_future_layer=2 \
+    --vq_n_e=10 --vq_coe_ema=0.95 --KT=0.1 --vq_use_st_emb --vq_st_emb_rate=1.2 --vq_coe_r_l1=0.0 \
     --sa_type=egpthn --n_state_layer=2 --n_action_layer=1 --use_pos_emb \
-    --model_name=PIS_GPTHN_NN_EMA_DGOAL_GGOAL_RECS_ENCO+_ \
-    --task=PegInsertionSide-v0 --control_mode=pd_joint_delta_pos --obs_mode=state --seed=0 \
+    --model_name=SC_GPTHN_NN_EMA_DGOAL_GGOAL_RECS_ENCO+_INCNLL_2000_ \
+    --task=StackCube-v0 --control_mode=pd_joint_delta_pos --obs_mode=state --seed=0 \
     --num_traj=-1 --context_length=60 --min_seq_length=60 \
     --save_every=100 --log_every=100 \
     --num_workers=6 --multiplier=26

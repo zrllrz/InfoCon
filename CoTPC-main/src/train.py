@@ -185,6 +185,8 @@ if __name__ == "__main__":
         attn_pdrop=float(args.dropout),
         cot_decoder=args.cot_decoder,
     )
+    print('state_dim', state_dim)
+    input()
     model = GPTWithCoT(conf, state_dim=state_dim, action_dim=action_dim).cuda()
     optimizer = model.configure_adamw_optimizers({
         'init_lr': float(args.init_lr),

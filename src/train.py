@@ -72,7 +72,11 @@ def parse_args():
                         help="ema moving rate")
     parser.add_argument('--KT', type=str, default='1.0',
                         help="Temperature for classifier")
-    parser.add_argument("--vq_t_emb_rate", default='1.2', type=str,
+    parser.add_argument("--vq_use_ft_emb", action='store_true',
+                        help="use frequent time step embedding")
+    parser.add_argument("--vq_use_st_emb", action='store_true',
+                        help="use spherical time step embedding")
+    parser.add_argument("--vq_st_emb_rate", default='1.2', type=str,
                         help="division rate for time sphere embedding")
     parser.add_argument("--vq_coe_r_l1", default='0.0', type=str,
                         help="l1 regularization on length of every prototype")
@@ -144,7 +148,8 @@ if __name__ == "__main__":
         + '-r' + str(args.n_rec_layer) \
         + (('-f' + str(args.n_future_layer)) if args.n_future_layer != 0 else '') \
         + '-c' + str(args.vq_n_e) + ('-use_prob_sel_train' if args.vq_use_prob_sel_train else '') + ('-use_timestep_appeal' if args.vq_use_timestep_appeal else '')\
-        + '_KT' + args.KT + '_EMA' + args.vq_coe_ema + '_temb' + args.vq_t_emb_rate \
+        + '_KT' + args.KT + '_EMA' + args.vq_coe_ema + (('_st-emb' + args.vq_st_emb_rate) if args.vq_use_st_emb else '') \
+        + ('_ft-emb' if args.vq_use_ft_emb else '') \
         + '-r_l1' + args.vq_coe_r_l1 \
         + '-' + args.sa_type + '_s' + str(args.n_state_layer) + '_a' + str(args.n_action_layer) + ('-use_future_state' if args.use_future_state else '') \
         + '-emb' + str(args.n_embd) \
@@ -320,7 +325,9 @@ if __name__ == "__main__":
         action_dim=action_dim,
         key_dim=args.dim_key,
         e_dim=args.dim_e,
-        vq_t_emb_rate=float(args.vq_t_emb_rate),
+        vq_use_ft_emb=args.vq_use_ft_emb,
+        vq_use_st_emb=args.vq_use_st_emb,
+        vq_st_emb_rate=float(args.vq_st_emb_rate),
         vq_coe_r_l1=float(args.vq_coe_r_l1),
         vq_use_prob_sel_train=args.vq_use_prob_sel_train,
         vq_use_timestep_appeal=args.vq_use_timestep_appeal,

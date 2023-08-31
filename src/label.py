@@ -338,6 +338,7 @@ if __name__ == "__main__":
         assert False
 
     print(params['vq_n_e'])
+    print('stat_dim', state_dim)
     autocot_model = AutoCoT(
         key_config=key_config,
         sa_config=sa_config,
@@ -352,14 +353,16 @@ if __name__ == "__main__":
         action_dim=action_dim,
         key_dim=key_dim,
         e_dim=e_dim,
-        vq_t_emb_rate=float(params['vq_t_emb_rate']),
+        vq_use_ft_emb=params['vq_use_st_emb'],
+        vq_use_st_emb=params['vq_use_st_emb'],
+        vq_st_emb_rate=float(params['vq_st_emb_rate']),
     )
 
     autocot_model = autocot_model.cuda()
     autocot_model.load_state_dict(state_dict_from_ckpt, strict=False)
     autocot_model.eval()
 
-    with open(traj_save_keys_path+'/keys-8-29-0.txt', 'w') as fk:
+    with open(traj_save_keys_path + '/keys.txt', 'w') as fk:
         for i_traj in range(length):
             traj_state = dataset['obs'][i_traj]
             traj_action = dataset['actions'][i_traj]
