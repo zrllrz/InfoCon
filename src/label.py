@@ -353,7 +353,7 @@ if __name__ == "__main__":
         action_dim=action_dim,
         key_dim=key_dim,
         e_dim=e_dim,
-        vq_use_ft_emb=params['vq_use_st_emb'],
+        vq_use_ft_emb=params['vq_use_ft_emb'],
         vq_use_st_emb=params['vq_use_st_emb'],
         vq_st_emb_rate=float(params['vq_st_emb_rate']),
     )

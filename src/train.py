@@ -68,8 +68,12 @@ def parse_args():
 
     parser.add_argument('--vq_n_e', type=int, default=100,
                         help="How many kinds of keys in the key_book")
+    parser.add_argument("--vq_use_r", action='store_true',
+                        help="use learnable radius of prototype")
     parser.add_argument('--vq_coe_ema', type=str, default='0.95',
                         help="ema moving rate")
+    parser.add_argument('--vq_ema_ave', action='store_true',
+                        help="average or not")
     parser.add_argument('--KT', type=str, default='1.0',
                         help="Temperature for classifier")
     parser.add_argument("--vq_use_ft_emb", action='store_true',
@@ -131,6 +135,11 @@ def parse_args():
                         help="A positive number for fast async data loading.")
     parser.add_argument('--multiplier', type=int, default=52,
                         help="Duplicate the dataset to reduce data loader overhead.")
+    parser.add_argument('--train_half', action='store_true',
+                        help="train half (do not optimize gen goal loss)")
+
+    parser.add_argument('--train_mode', default='scratch', type=str,
+                        help="training mode")  # 3 choices: 'scratch', 'pretrain', 'finetune'
 
     return parser.parse_args()
 
@@ -148,14 +157,15 @@ if __name__ == "__main__":
         + '-r' + str(args.n_rec_layer) \
         + (('-f' + str(args.n_future_layer)) if args.n_future_layer != 0 else '') \
         + '-c' + str(args.vq_n_e) + ('-use_prob_sel_train' if args.vq_use_prob_sel_train else '') + ('-use_timestep_appeal' if args.vq_use_timestep_appeal else '')\
-        + '_KT' + args.KT + '_EMA' + args.vq_coe_ema + (('_st-emb' + args.vq_st_emb_rate) if args.vq_use_st_emb else '') \
+        + '_KT' + args.KT + '_EMA' + args.vq_coe_ema + ('_ema_ave' if args.vq_ema_ave else '_ema_single') + (('_st-emb' + args.vq_st_emb_rate) if args.vq_use_st_emb else '') \
         + ('_ft-emb' if args.vq_use_ft_emb else '') \
-        + '-r_l1' + args.vq_coe_r_l1 \
+        + '-r_l1' + args.vq_coe_r_l1 + ('-use_r' if args.vq_use_r else '') \
         + '-' + args.sa_type + '_s' + str(args.n_state_layer) + '_a' + str(args.n_action_layer) + ('-use_future_state' if args.use_future_state else '') \
         + '-emb' + str(args.n_embd) \
         + '-key' + str(args.dim_key) \
         + '-e' + str(args.dim_e) \
         + '-cluster' + args.coe_cluster + '-rec' + args.coe_rec + ('-use_decay_mask_rate' if args.use_decay_mask_rate else '') \
+        + ('-train_half' if args.train_half else '')
 
     # + '-ss' + args.c_ss + '-sh' + args.c_sh + '-hs' + args.c_hs + '-hh' + args.c_hh \
 
@@ -317,7 +327,9 @@ if __name__ == "__main__":
         rec_config=rec_config,
         future_config=future_config,
         vq_n_e=args.vq_n_e,
+        vq_use_r=args.vq_use_r,
         vq_coe_ema=float(args.vq_coe_ema),
+        vq_ema_ave=args.vq_ema_ave,
         KT=float(args.KT),
         optimizers_config=optimizer_config,
         scheduler_config=scheduler_config,
@@ -346,23 +358,67 @@ if __name__ == "__main__":
             path = os.path.join(model_path, f'{args.from_ckpt}.pth')
         autocot_model.load_state_dict(torch.load(path), strict=True)
         print(f'Pretrained module loaded from {path}.')
-
     log_path = os.path.join(model_path, 'log.txt')
 
-    mysavelogger = MySaveLogger(
-        path=model_path,
-        args=args,
-        epoch_frequency=args.save_every
-    )
+    if args.train_mode == 'scratch':
+        autocot_model.mode = 'goal'
+        mysavelogger = MySaveLogger(
+            path=model_path,
+            args=args,
+            epoch_frequency=args.save_every
+        )
+        trainer = pl.Trainer(
+            accelerator="gpu",
+            devices=1,
+            callbacks=[mysavelogger],
+            max_steps=(args.n_iters // 2) if args.train_half else args.n_iters,
+        )
+        trainer.fit(
+            model=autocot_model,
+            train_dataloaders=train_data,
+        )
 
-    trainer = pl.Trainer(
-        accelerator="gpu",
-        devices=1,
-        callbacks=[mysavelogger],
-        max_steps=args.n_iters,
-    )
-    trainer.fit(
-        model=autocot_model,
-        train_dataloaders=train_data,
-    )
+    elif args.train_mode == 'pretrain':
+        autocot_model.mode = 'rec'
+        trainer = pl.Trainer(
+            accelerator="gpu",
+            devices=1,
+            max_steps=101*100,
+        )
+        trainer.fit(
+            model=autocot_model,
+            train_dataloaders=train_data,
+        )
+        print('Save pretrained checkpoints')
+        torch.save({
+            'module': autocot_model.state_dict(),
+            'metadata': vars(args)
+        }, os.path.join(MODEL_PATH, args.task + '_REC_CHECKPOINT' + ('_R' if args.vq_use_r else '') + '.pth'))
+        print('Done!')
+    elif args.train_mode == 'finetune':
+        autocot_model.mode = 'goal'
+        rec_path = os.path.join(MODEL_PATH, args.task + '_REC_CHECKPOINT' + ('_R' if args.vq_use_r else '') + '.pth')
+        print('Try to load pretrained model from path:\n', rec_path)
+        ckpt = torch.load(rec_path, map_location=torch.device('cpu'))
+        state_dict_from_ckpt = ckpt['module']
+        autocot_model.load_state_dict(state_dict_from_ckpt, strict=False)
+        print('Done!')
+        mysavelogger = MySaveLogger(
+            path=model_path,
+            args=args,
+            epoch_frequency=args.save_every
+        )
+        trainer = pl.Trainer(
+            accelerator="gpu",
+            devices=1,
+            callbacks=[mysavelogger],
+            max_steps=(args.n_iters // 2) if args.train_half else args.n_iters,
+        )
+        trainer.fit(
+            model=autocot_model,
+            train_dataloaders=train_data,
+        )
 
+    else:
+        print('Unknown train mode')
+        assert False

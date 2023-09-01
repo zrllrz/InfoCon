@@ -35,7 +35,7 @@ increae_encourage_identity_map = increaseEncourageIdentityMap.apply
 
 
 class VQClassifierNNTime(nn.Module):
-    def __init__(self, key_dim, n_e, e_dim, e_split, KT=0.1, use_ema=False, coe_ema=0.5,
+    def __init__(self, key_dim, n_e, e_dim, e_split, KT=0.1, use_r=False, use_ema=False, coe_ema=0.5, ema_ave=False,
                  use_ft_emb=True, use_st_emb=True, t_emb_rate=1.2,
                  use_prob_sel_train=False, use_timestep_appeal=False):
         super().__init__()
@@ -51,6 +51,7 @@ class VQClassifierNNTime(nn.Module):
         self.sm = nn.Softmax(dim=-1)
 
         # length of every prototype
+        self.use_r = use_r
         self.r_keys = nn.Embedding(n_e, 1)
         nn.init.constant_(self.r_keys.weight, 0.999)
         self.r_activate = nn.Hardtanh(min_val=0.0, max_val=1.0)
@@ -89,6 +90,7 @@ class VQClassifierNNTime(nn.Module):
 
         self.use_ema = use_ema
         self.coe_ema = coe_ema
+        self.ema_ave = ema_ave
         # None or a float point bound (how to calculate it will be defined in autocot model...)
 
         self.register_buffer('arange', arange)
@@ -151,11 +153,15 @@ class VQClassifierNNTime(nn.Module):
         # keys: (..., key_dim)
         # u_t: (...)
         keys = keys.contiguous()
-        keys_norm = F.normalize(keys, p=2.0, dim=-1)
-        if self.use_st_emb or self.use_ft_emb:
-            keys_norm_t_emb = self.t_emb(feature=keys_norm, unified_t=u_t)  # key_soft: (..., key_dim_t_emb)
+        if self.use_ft_emb:
+            keys_t_emb = self.t_emb(feature=keys, unified_t=u_t)
+            keys_norm_t_emb = F.normalize(keys_t_emb, p=2.0, dim=-1)
         else:
-            keys_norm_t_emb = keys_norm
+            keys_norm = F.normalize(keys, p=2.0, dim=-1)
+            if self.use_st_emb:
+                keys_norm_t_emb = self.t_emb(feature=keys_norm, unified_t=u_t)  # key_soft: (..., key_dim_t_emb)
+            else:
+                keys_norm_t_emb = keys_norm
         return keys_norm_t_emb
 
     def get_key_soft_indices(self, key_soft, u_t):
@@ -164,17 +170,19 @@ class VQClassifierNNTime(nn.Module):
         with torch.no_grad():
             key_soft = key_soft.contiguous()
             B, T = key_soft.shape[0], key_soft.shape[1]
-            key_soft_norm = F.normalize(key_soft, p=2.0, dim=-1)
-            if self.use_st_emb or self.use_ft_emb:
-                key_soft_t_emb = self.t_emb(feature=key_soft_norm, unified_t=u_t)  # key_soft: (B, T, key_dim + 1)
-            else:
-                key_soft_t_emb = key_soft_norm
+            # key_soft_norm = F.normalize(key_soft, p=2.0, dim=-1)
+            # if self.use_st_emb or self.use_ft_emb:
+            #     key_soft_t_emb = self.t_emb(feature=key_soft_norm, unified_t=u_t)  # key_soft: (B, T, key_dim + 1)
+            # else:
+            #     key_soft_t_emb = key_soft_norm
+            key_soft_t_emb = self.get_time_emb_keys(key_soft, u_t)
             key_soft_flattened = key_soft_t_emb.view(B*T, self.key_dim_t_emb)  # (B*T, key_dim + 1)
 
 
             # construct usage keys in the codebook (time + feature)
             keys_norm = self.get_keys()  # (n_e, key_dim + 1)
-            keys_norm = keys_norm * self.get_r()
+            if self.use_r:
+                keys_norm = keys_norm * self.get_r()
             score_ksh_flattened = torch.einsum('bd,dn->bn', key_soft_flattened,
                                                rearrange(keys_norm, 'n d -> d n'))  # (B*T, n_e)
             # use the nearest key
@@ -201,18 +209,20 @@ class VQClassifierNNTime(nn.Module):
         B, T = key_soft.shape[0], key_soft.shape[1]
 
         # first construct key_soft with timestep embedding
-        key_soft_norm = F.normalize(key_soft, p=2.0, dim=-1)  # (B, T, key_dim)
-        if self.use_st_emb or self.use_ft_emb:
-            key_soft_t_emb = self.t_emb(feature=key_soft_norm, unified_t=u_t)  # (B, T, key_dim + 1)
-        else:
-            key_soft_t_emb = key_soft_norm
+        # key_soft_norm = F.normalize(key_soft, p=2.0, dim=-1)  # (B, T, key_dim)
+        # if self.use_st_emb or self.use_ft_emb:
+        #     key_soft_t_emb = self.t_emb(feature=key_soft_norm, unified_t=u_t)  # (B, T, key_dim + 1)
+        # else:
+        #     key_soft_t_emb = key_soft_norm
+        key_soft_t_emb = self.get_time_emb_keys(key_soft, u_t)
         key_soft_flattened = key_soft_t_emb.view(B*T, self.key_dim_t_emb)  # (B*T, key_dim + 1)
 
         # construct usage keys in the codebook (time + feature)
         keys_norm = self.get_keys()  # (n_e, key_dim + 1)
         # print('keys_norm.shape:', keys_norm.shape)
         keys_norm = keys_norm.detach()  # update of ema do not need gradient
-        keys_norm = keys_norm * self.get_r()  # (n_e, key_dim + 1)
+        if self.use_r:
+            keys_norm = keys_norm * self.get_r()  # (n_e, key_dim + 1)
         # print('keys_norm.shape:', keys_norm.shape)
 
         # calc score_ksh
@@ -226,36 +236,41 @@ class VQClassifierNNTime(nn.Module):
         # EMA update of keys behind
         with torch.no_grad():
             # u_t_flattened = u_t.view(-1)  # (B*T)
-            sum_mask = torch.eq(self.arange.view(-1, 1).repeat(1, B * T),
-                                encoding_indices_flattened.view(1, -1).repeat(self.n_e, 1))
-            # if self.use_timestep_appeal:
-            #     print('use_timestep_appeal')
-            #     time_low_mask = \
-            #         torch.greater_equal(u_t_flattened.view(1, -1).repeat(self.n_e, 1), self.t_base)
-            #     time_high_mask = \
-            #         torch.less(u_t_flattened.view(1, -1).repeat(self.n_e, 1), torch.add(self.t_base, 1.0 / self.n_e))
-            #     time_mask = torch.logical_and(time_low_mask, time_high_mask)  # (n_e, B*T)
-            #     sum_mask = torch.logical_or(sum_mask, time_mask)
+            if self.ema_ave:
+                # first average all norms, then update
+                sum_mask = torch.eq(self.arange.view(-1, 1).repeat(1, B * T),
+                                    encoding_indices_flattened.view(1, -1).repeat(self.n_e, 1))
+                sum_mask = sum_mask.to(dtype=torch.float32)
 
-            sum_mask = sum_mask.to(dtype=torch.float32)
 
-            cnt = 1 + torch.sum(sum_mask, dim=-1, keepdim=True)  # (n_e, 1)
-            mean_key_soft = torch.div(sum_mask @ key_soft_flattened, cnt)  # (n_e, key_dim + 1)
-            mean_key_soft = torch.nan_to_num(mean_key_soft)  # (n_e, key_dim + 1)
-            keys_norm_new = F.normalize(keys_norm * self.coe_ema + mean_key_soft * (1.0 - self.coe_ema),
-                                        p=2.0, dim=-1)  # (n_e, key_dim + 1)
+                cnt = 1 + torch.sum(sum_mask, dim=-1, keepdim=True)  # (n_e, 1)
+                mean_key_soft = torch.div(sum_mask @ key_soft_flattened, cnt)  # (n_e, key_dim_t_emb)
+                mean_key_soft = torch.nan_to_num(mean_key_soft)  # (n_e, key_dim + 1)
+                keys_norm_new = F.normalize(keys_norm * self.coe_ema + mean_key_soft * (1.0 - self.coe_ema),
+                                            p=2.0, dim=-1)  # (n_e, key_dim + 1)
+            else:
+                print('do not ave')
+                keys_norm_new = keys_norm
+                for j in range(B*T):
+                    ind = encoding_indices_flattened[j].item()
+                    keys_norm_new[ind] = \
+                        F.normalize(keys_norm_new[ind] * self.coe_ema + key_soft_flattened[j] * (1.0 - self.coe_ema),
+                                    p=2.0, dim=-1)
+
             if self.use_st_emb:
+                # do not switch time since it is not necessary
                 t_keys_new, _, keys_new = self.t_emb.split_t_f(keys_norm_new)
-                t_keys_new, index_switch = torch.sort(t_keys_new)  # swtich according to time order
+                # t_keys_new, index_switch = torch.sort(t_keys_new)  # swtich according to time order
                 self.t_keys.weight.data = t_keys_new.unsqueeze(1)
 
                 # switch other three books
-                self.keys.weight.data = keys_new[index_switch]
-                self.r_keys.weight.data = self.r_keys.weight.data[index_switch]
-                self.vparams.weight.data = self.vparams.weight.data[index_switch]
+                self.keys.weight.data = keys_new
+                # if self.use_r:
+                #     self.r_keys.weight.data = self.r_keys.weight.data[index_switch]
+                # self.vparams.weight.data = self.vparams.weight.data[index_switch]
 
                 # switch encoding_indices
-                encoding_indices_flattened = index_switch[encoding_indices_flattened]
+                # encoding_indices_flattened = index_switch[encoding_indices_flattened]
             else:
                 self.keys.weight.data = keys_norm_new
 
@@ -266,7 +281,8 @@ class VQClassifierNNTime(nn.Module):
         # calc score_ksh
         keys_norm = self.get_keys()  # (n_e, key_dim + 1)
         keys_norm = keys_norm.detach()  # update of ema do not need gradient
-        keys_norm = keys_norm * self.get_r()  # (n_e, key_dim + 1)
+        if self.use_r:
+            keys_norm = keys_norm * self.get_r()  # (n_e, key_dim + 1)
         score_ksh_flattened = torch.einsum('bd,dn->bn', key_soft_flattened,
                                            rearrange(keys_norm, 'n d -> d n'))  # (B*T, n_e)
         # score_ksh = score_ksh_flattened.view(B, T, self.n_e)  # (B, T, n_e)

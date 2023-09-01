@@ -161,7 +161,9 @@ class AutoCoT(pl.LightningModule):
         sa_config,
         future_config=None,
         vq_n_e=10,
+        vq_use_r=False,
         vq_coe_ema=0.95,
+        vq_ema_ave=False,
         KT=0.1,
         optimizers_config=None,
         scheduler_config=None,
@@ -244,8 +246,10 @@ class AutoCoT(pl.LightningModule):
             e_dim=e_dim * sa_config.n_state_layer if (sa_config.type == 'hn' or sa_config.type == 'egpthn') else e_dim,
             e_split=sa_config.n_state_layer,
             KT=KT,
+            use_r=vq_use_r,
             use_ema=True,
             coe_ema=vq_coe_ema,
+            ema_ave=vq_ema_ave,
             use_ft_emb=vq_use_ft_emb,
             use_st_emb=vq_use_st_emb,
             t_emb_rate=vq_st_emb_rate,
@@ -285,6 +289,13 @@ class AutoCoT(pl.LightningModule):
         self.automatic_optimization = False
         self.mytask = task
 
+        self.half_linear_increase = 0.0
+        self.half_linear_increase_stop = 0.0
+
+        self.mode = 'rec_goal'
+        # two mode: 'rec': only train vqvae
+        #           'goal': first load vqvae trained checkpoint, then train with goal
+
     def mask_cluster_rate(self):
         # calculate the mask off rate of cluster according to action prediction behavior
         # return a fp between [0, 1], meaning the proportion of mask off clustering place
@@ -294,6 +305,9 @@ class AutoCoT(pl.LightningModule):
         max_steps = self.trainer.max_steps
         global_step = self.trainer.global_step
         self.progress_bar_step = global_step / max_steps
+        self.half_linear_increase = max(0.0, self.progress_bar_step * 2.0 - 1.0)
+        self.half_linear_increase_stop = min(1.0, self.progress_bar_step * 2.0)
+
         self.key_book.reset_oor_r(left_step=(max_steps-global_step+1))
 
         self.step_cluster += 1
@@ -323,6 +337,8 @@ class AutoCoT(pl.LightningModule):
             print(table)
             print(self.key_book.t_keys.weight.data.squeeze(-1))
             print(self.key_book.get_r().squeeze(-1))
+        print('half_linear_increase', self.half_linear_increase)
+        print('half_linear_increase_stop', self.half_linear_increase_stop)
 
     def loss_reward(self, states, indices):
         # indices (B, T) choice of index of this batch
@@ -351,6 +367,12 @@ class AutoCoT(pl.LightningModule):
         B, T = indices.shape
         arange_ext = torch.arange(T, device=states.device).view(1, -1).repeat(B, 1)
         mask = torch.logical_not(torch.eq(indices[:, 1:], indices[:, :-1]))
+
+        last_mask = mask + torch.sum(mask, dim=-1, keepdim=True) - torch.cumsum(mask, dim=-1)
+        last_mask = last_mask.to(dtype=torch.bool)
+        last_mask = torch.cat([last_mask, torch.zeros(size=(B, 1), dtype=torch.bool, device=states.device)], dim=-1)
+        last_mask = last_mask.to(dtype=torch.float32)
+
         his_ind = torch.full(size=(B, 1), fill_value=(T-1), device=states.device)
         future_state_indices = torch.full(size=(B, 1), fill_value=(T-1), device=states.device)
         for i in range(T-2, -1, -1):
@@ -359,10 +381,61 @@ class AutoCoT(pl.LightningModule):
             future_state_indices = torch.cat([new_ind, future_state_indices], dim=1)
         future_state = \
             torch.gather(states, dim=1, index=future_state_indices.unsqueeze(-1).repeat(1, 1, states.shape[2]))
-        return future_state
+
+        return future_state, last_mask
+
+    def rec_training_step(self, batch, batch_idx):
+        self.step += 1
+        opt_policy, opt_cluster = self.optimizers()
+        sch_policy, sch_cluster = self.lr_schedulers()
+
+        states, timesteps, actions, unified_t, lengths = batch['s'], batch['t'], batch['a'], batch['unified_t'], batch['lengths']
+        unified_t = unified_t[:states.shape[0], :states.shape[1]]
+
+        key_soft, state_trans = self.key_net(states, timesteps, actions)
+        encoding_indices, key_hard, _, _, w_max, w_cnt, _ = \
+            self.key_book(key_soft, unified_t)
+
+        # only do the encoding, which is a start point for concept extraction
+        state_recs_from_keys = self.rec_net(key_hard, timesteps)
+        l_s_recs, _ = get_loss(state_recs_from_keys, states, lengths)
+
+        # clustering behind
+        enough_mask = torch.less(w_max, 0.5 + 0.5 * self.half_linear_increase_stop).to(dtype=torch.float32)
+        ls_label_cluster = torch.neg(torch.log(w_max))
+        l_label_cluster = ls_label_cluster.mean()  # for log
+
+        ls_label_cluster_masked = ls_label_cluster * enough_mask
+        ls_label_cluster_weighed = ls_label_cluster_masked * w_cnt
+
+        l_label_cluster_weighed = torch.div(ls_label_cluster_weighed.sum(), self.key_book.n_e)
+
+        l_rec = l_s_recs + self.coe_cluster * l_label_cluster_weighed
+
+        opt_policy.zero_grad()
+        self.manual_backward(l_rec)
+        opt_policy.step()
+        sch_policy.step()
+
+        # statistic on encoding indices
+        if self.step % 10 == 0:
+            self.statistic_indices(encoding_indices, unified_t)
+
+        self.log_dict(
+            {
+                'rs': l_s_recs,
+                '©l': l_label_cluster,
+            }, prog_bar=True, on_step=True, on_epoch=True
+        )
 
     def training_step(self, batch, batch_idx):
         # separate optimzing whole net and the embedding space
+
+        if self.mode == 'rec':
+            return self.rec_training_step(batch, batch_idx)
+
+        assert self.mode == 'goal'
+
         self.step += 1
         opt_policy, opt_cluster = self.optimizers()
         sch_policy, sch_cluster = self.lr_schedulers()
@@ -378,14 +451,16 @@ class AutoCoT(pl.LightningModule):
         encoding_indices, key_hard, vparams_w, vparams_hard, w_max, w_cnt, key_soft_t_emb = \
             self.key_book(key_soft, unified_t)
 
-        if self.future_net is not None:
+        if self.future_net is not None and self.half_linear_increase > 0.0:
             state_future_preds = self.future_net(states, timesteps, actions, keys=key_hard)
-            state_future = self.get_future_state(states, encoding_indices)
-            l_future, _ = get_loss(state_future_preds, state_future, lengths)
+            state_future, last_mask = self.get_future_state(states, encoding_indices)
+            l_future, ls_future = get_loss(state_future_preds, state_future, lengths)
+            l_future = torch.mean(ls_future * last_mask)
         else:
             l_future = 0.0
             state_future = None
-        state_recs_from_keys = self.rec_net(key_soft_t_emb, timesteps)
+        state_recs_from_keys = self.rec_net(key_hard, timesteps)
+
 
         # loss: state transmission
         l_s_trans, _ = get_loss(state_trans, states[:, 1:, ...], lengths - 1)
@@ -394,7 +469,7 @@ class AutoCoT(pl.LightningModule):
 
         # loss: clustering behind
         mask_cluster_rate = self.mask_cluster_rate()
-        enough_mask = torch.less(w_max, 0.5 + 0.5 * (1.0 - mask_cluster_rate)).to(dtype=torch.float32)
+        enough_mask = torch.less(w_max, 0.5 + 0.5 * self.half_linear_increase_stop).to(dtype=torch.float32)
         # print('w_cnt.shape', w_cnt.shape)
         ls_label_cluster = torch.neg(torch.log(w_max))
         l_label_cluster = ls_label_cluster.mean()
@@ -430,7 +505,7 @@ class AutoCoT(pl.LightningModule):
         #     self.key_book.r_p_reset = (l_a_preds_max - l_a_preds) / (l_a_preds_max * self.key_book.n_e)
 
         # need some regulation on the explicit reward (ascent reward, large at switching point)
-        l_policy = l_a_preds + l_s_trans + l_future + self.coe_rec * l_s_recs
+        l_policy = l_a_preds + self.half_linear_increase * l_future + self.coe_rec * l_s_recs
         if self.flag_cluster:
             # reward is the prob of completion
             # (1.0 - reward) is the prob of un-completion
@@ -441,7 +516,6 @@ class AutoCoT(pl.LightningModule):
             # print('encoding_indices', encoding_indices)
             reward_i = self.loss_reward(states, indices=encoding_indices)
             self.log(name='rt', value=float(self.vq_turn), prog_bar=True, on_step=True, on_epoch=True)
-            reg_r_l2 = (self.key_book.get_r() ** 2).sum()
 
             ls_label_cluster_masked = ls_label_cluster * enough_mask
             if self.use_decay_mask_rate:
@@ -457,11 +531,10 @@ class AutoCoT(pl.LightningModule):
 
             l_policy = \
                 l_policy \
-                + 2.0 * self.coe_cluster * (
+                + self.coe_cluster * (
                     torch.div(ls_label_cluster_weighed.sum(), self.key_book.n_e)
                     + torch.div(ls_reward_weighed.sum(), self.key_book.n_e)
                     + ls_reward_i.mean()
-                    + self.vq_coe_r_l1 * reg_r_l2
                 )
 
         # elif self.sa_type == 'egpt' or self.sa_type == 'egpthn':
@@ -651,10 +724,10 @@ class AutoCoT(pl.LightningModule):
         no_decay.add('key_net.global_pos_emb')
         no_decay_wo_sa.add('key_net.local_pos_emb')
         no_decay_wo_sa.add('key_net.global_pos_emb')
-        no_decay.add('rec_net.local_pos_emb')
-        no_decay.add('rec_net.global_pos_emb')
-        no_decay_wo_sa.add('rec_net.local_pos_emb')
-        no_decay_wo_sa.add('rec_net.global_pos_emb')
+        # no_decay.add('rec_net.local_pos_emb')
+        # no_decay.add('rec_net.global_pos_emb')
+        # no_decay_wo_sa.add('rec_net.local_pos_emb')
+        # no_decay_wo_sa.add('rec_net.global_pos_emb')
         no_decay.add('sa_net.local_pos_emb')
         no_decay.add('sa_net.global_pos_emb')
         if self.future_net is not None:

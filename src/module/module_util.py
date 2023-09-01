@@ -49,8 +49,8 @@ class FreqEncoder(nn.Module):
         emb_cos = torch.cos(u_t @ self.coe_freq)  # ()
         emb_sin = torch.sin(u_t @ self.coe_freq)
         emb_t = torch.cat([emb_cos, emb_sin], dim=-1)  # (..., 2 * half_t_size)
-        emb_t = F.normalize(self.out_linear(emb_t), p=2.0, dim=-1)  # (..., feature_size)
-        emb_t = F.normalize(emb_t + feature, p=2.0, dim=-1)  # feature should be normalized...
+        emb_t = self.out_linear(emb_t)  # (..., feature_size)
+        emb_t = emb_t + feature  # feature should be normalized...
         return emb_t
 
 

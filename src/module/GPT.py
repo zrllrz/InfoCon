@@ -657,8 +657,8 @@ class RecNet(nn.Module):
         self.key_dim = key_dim
         self.block_size = config.block_size
 
-        self.local_pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
-        self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep, config.n_embd))
+        # self.local_pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
+        # self.global_pos_emb = nn.Parameter(torch.zeros(1, config.max_timestep, config.n_embd))
 
         # key embeddings
         self.key_encoder = MLP(key_dim, config.n_embd, hidden_dims=[256])
@@ -691,15 +691,16 @@ class RecNet(nn.Module):
         # Embeddings for key (action, and key state query) tokens.
         token_embeddings = key_embeddings
 
-        # Set up position embeddings similar to that in Decision Transformer.
-        global_pos_emb = torch.repeat_interleave(self.global_pos_emb, B, dim=0)
-        timesteps_rp = torch.repeat_interleave(timesteps[:, None], self.config.n_embd, dim=-1)
-        global_pos_emb = torch.gather(global_pos_emb, 1, timesteps_rp.long())  # BS x 1 x D
-        local_pos_emb = torch.repeat_interleave(self.local_pos_emb[:, :T, :], 1, dim=1)
-        pos_emb = global_pos_emb + local_pos_emb
+        # # Set up position embeddings similar to that in Decision Transformer.
+        # global_pos_emb = torch.repeat_interleave(self.global_pos_emb, B, dim=0)
+        # timesteps_rp = torch.repeat_interleave(timesteps[:, None], self.config.n_embd, dim=-1)
+        # global_pos_emb = torch.gather(global_pos_emb, 1, timesteps_rp.long())  # BS x 1 x D
+        # local_pos_emb = torch.repeat_interleave(self.local_pos_emb[:, :T, :], 1, dim=1)
+        # pos_emb = global_pos_emb + local_pos_emb
+        #
+        # The keys are embedded with unified time steps !!!
 
-        x = token_embeddings + pos_emb
-
+        x = token_embeddings  # + pos_emb
         x = self.drop(x)
         x, _ = self.blocks(x, skip_feature)
         x = self.ln(x)
