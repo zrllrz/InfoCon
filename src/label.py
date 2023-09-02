@@ -362,7 +362,7 @@ if __name__ == "__main__":
     autocot_model.load_state_dict(state_dict_from_ckpt, strict=False)
     autocot_model.eval()
 
-    with open(traj_save_keys_path + '/keys.txt', 'w') as fk:
+    with open(traj_save_keys_path + '/keys3.txt', 'w') as fk:
         for i_traj in range(length):
             traj_state = dataset['obs'][i_traj]
             traj_action = dataset['actions'][i_traj]

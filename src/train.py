@@ -165,7 +165,9 @@ if __name__ == "__main__":
         + '-key' + str(args.dim_key) \
         + '-e' + str(args.dim_e) \
         + '-cluster' + args.coe_cluster + '-rec' + args.coe_rec + ('-use_decay_mask_rate' if args.use_decay_mask_rate else '') \
-        + ('-train_half' if args.train_half else '')
+        + ('-train_half' if args.train_half else '') \
+        + ('-finetune' if args.train_mode == 'finetune' else '')
+
 
     # + '-ss' + args.c_ss + '-sh' + args.c_sh + '-hs' + args.c_hs + '-hh' + args.c_hh \
 

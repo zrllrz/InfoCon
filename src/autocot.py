@@ -496,13 +496,6 @@ class AutoCoT(pl.LightningModule):
             cluster_mask = None
 
         self.log(name='cm', value=mask_cluster_rate, prog_bar=True, on_step=True, on_epoch=True)
-        # print('rate mask', cluster_mask.sum().item() / ls_a_preds_flattened.shape[0])
-        # print('cluster_mask.shape', cluster_mask.shape)
-        # input()
-
-        # l_a_preds_max = torch.max(ls_a_preds)
-        # with torch.no_grad():
-        #     self.key_book.r_p_reset = (l_a_preds_max - l_a_preds) / (l_a_preds_max * self.key_book.n_e)
 
         # need some regulation on the explicit reward (ascent reward, large at switching point)
         l_policy = l_a_preds + self.half_linear_increase * l_future + self.coe_rec * l_s_recs
@@ -536,70 +529,6 @@ class AutoCoT(pl.LightningModule):
                     + torch.div(ls_reward_weighed.sum(), self.key_book.n_e)
                     + ls_reward_i.mean()
                 )
-
-        # elif self.sa_type == 'egpt' or self.sa_type == 'egpthn':
-        #     action_preds, reward, v_r_norm = self.sa_net(states, timesteps, actions=actions, keys=vparams_hard, future_states=state_future)
-        #
-        #     # loss: state prediction & action prediction
-        #     l_s_preds = 0.0
-        #     l_a_preds, ls_a_preds = get_loss(action_preds, actions, lengths)
-        #
-        #     # select a part of action prediction, only update a part of clustering related loss according to it
-        #     if self.use_decay_mask_rate:
-        #         ls_a_preds_flattened = ls_a_preds.view(-1)
-        #         mask_cluster_rate = self.mask_cluster_rate()
-        #         _, cluster_mask_index = \
-        #             torch.topk(ls_a_preds_flattened, k=int(mask_cluster_rate*ls_a_preds_flattened.shape[0]))
-        #         cluster_mask_flattened = torch.ones_like(ls_a_preds_flattened, dtype=torch.float32)
-        #         cluster_mask_flattened[cluster_mask_index] = 0.0
-        #         cluster_mask = cluster_mask_flattened.reshape(ls_a_preds.shape)
-        #     else:
-        #         mask_cluster_rate = 0.0
-        #         cluster_mask = None
-        #
-        #     self.log(name='cm', value=mask_cluster_rate, prog_bar=True, on_step=True, on_epoch=True)
-        #     # print('rate mask', cluster_mask.sum().item() / ls_a_preds_flattened.shape[0])
-        #     # print('cluster_mask.shape', cluster_mask.shape)
-        #     # input()
-        #
-        #     # l_a_preds_max = torch.max(ls_a_preds)
-        #     # with torch.no_grad():
-        #     #     self.key_book.r_p_reset = (l_a_preds_max - l_a_preds) / (l_a_preds_max * self.key_book.n_e)
-        #
-        #     # need some regulation on the explicit reward (ascent reward, large at switching point)
-        #     l_policy = l_a_preds + l_s_trans + l_future + self.coe_rec * l_s_recs
-        #     if self.flag_cluster:
-        #         # reward is the prob of completion
-        #         # (1.0 - reward) is the prob of un-completion
-        #         # log(1.0 - reward) should be as large as possible
-        #         # minimize -log(1.0 - reward)
-        #         # also we need to update one set of classifier during onr iteration
-        #         # print('before reward_i')
-        #         # print('encoding_indices', encoding_indices)
-        #         reward_i = self.loss_reward(states, indices=encoding_indices)
-        #         self.log(name='rt', value=float(self.vq_turn), prog_bar=True, on_step=True, on_epoch=True)
-        #         reg_r_l2 = (self.key_book.get_r() ** 2).sum()
-        #
-        #         ls_label_cluster_masked = ls_label_cluster * enough_mask
-        #         if self.use_decay_mask_rate:
-        #             ls_label_cluster_masked = ls_label_cluster_masked * cluster_mask
-        #         ls_label_cluster_weighed = ls_label_cluster_masked * w_cnt
-        #
-        #         ls_reward = torch.neg(torch.log(1.0 - reward))
-        #         ls_reward_i = torch.neg(torch.log(1.0 - reward_i))
-        #         if self.use_decay_mask_rate:
-        #             ls_reward = ls_reward * cluster_mask
-        #             ls_reward_i = ls_reward_i * cluster_mask
-        #         ls_reward_weighed = ls_reward * w_cnt
-        #
-        #         l_policy = \
-        #             l_policy \
-        #             + 2.0 * self.coe_cluster * (
-        #                 torch.div(ls_label_cluster_weighed.sum(), self.key_book.n_e)
-        #                 + torch.div(ls_reward_weighed.sum(), self.key_book.n_e)
-        #                 + ls_reward_i.mean()
-        #                 + self.vq_coe_r_l1 * reg_r_l2
-        #             )
 
         opt_policy.zero_grad()
         self.manual_backward(l_policy)
