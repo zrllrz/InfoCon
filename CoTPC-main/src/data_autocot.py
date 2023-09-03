@@ -31,12 +31,11 @@ class MS2Demos(Dataset):
         self.with_key_states = with_key_states  # Whether output key states.
         self.multiplier = multiplier
 
-
         # Usually set min and max traj length to be the same value.
         self.max_steps = -1  # Maximum timesteps across all trajectories.
         traj_path = os.path.join(DATA_PATH,
                                  f'{task}/trajectory.{obs_mode}.{control_mode}.h5')
-        key_path = os.path.join(DATA_PATH, f'{task}/keys3.txt')
+        key_path = os.path.join(DATA_PATH, f'{task}/keys-0902.txt')
         print('Traj path:', traj_path)
         print('Key path:', key_path)
         self.data = self.load_demo_dataset(traj_path, key_path, length)

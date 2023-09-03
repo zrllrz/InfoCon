@@ -64,6 +64,8 @@ def parse_args():
     parser.add_argument("--model_name", default='', type=str, help="Model name to be loaded.")
     parser.add_argument("--from_ckpt", default=-1, type=int, help="Ckpt of the module to be loaded.")
 
+    parser.add_argument("--pause", action='store_true', help="debug")
+
     # parser.add_argument("--eval_max_steps", default=200, type=int, help="Max steps allowed in eval.")
 
     return parser.parse_args()
@@ -362,7 +364,9 @@ if __name__ == "__main__":
     autocot_model.load_state_dict(state_dict_from_ckpt, strict=False)
     autocot_model.eval()
 
-    with open(traj_save_keys_path + '/keys3.txt', 'w') as fk:
+    bias_sum = 0.0
+
+    with open(traj_save_keys_path + '/keys-0902.txt', 'w') as fk:
         for i_traj in range(length):
             traj_state = dataset['obs'][i_traj]
             traj_action = dataset['actions'][i_traj]
@@ -426,6 +430,19 @@ if __name__ == "__main__":
                 key_state_step[current_label] = traj_action.shape[0] - 1
 
             print(key_state_step)
+            for i_gt in range(len(key_states_gt) - 1):
+                key_state_step_gt = key_states_gt[i_gt][1]
+                # print(key_state_step_gt)
+                key_state_large = torch.tensor(key_state_step) - key_state_step_gt
+                # print(key_state_large)
+                key_state_large = torch.where(torch.ge(key_state_large, 0), key_state_large, float('+inf'))
+                # print(key_state_large)
+                bias_sum += torch.min(key_state_large).item()
+                # print(bias_sum)
+                # input()
+
             for item in key_state_step:
                 fk.write(str(item) + ',')
             fk.write('\n')
+
+    print('average bias', bias_sum / length)

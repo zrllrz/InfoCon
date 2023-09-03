@@ -1,3 +1,6 @@
+import sys
+sys.path.append("/home/rzliu/AutoCoT/src/module")
+
 import numpy as np
 from math import exp, pow, log, cos, sin, pi
 import torch
@@ -451,7 +454,9 @@ class AutoCoT(pl.LightningModule):
         encoding_indices, key_hard, vparams_w, vparams_hard, w_max, w_cnt, key_soft_t_emb = \
             self.key_book(key_soft, unified_t)
 
-        if self.future_net is not None and self.half_linear_increase > 0.0:
+        coe_future = self.half_linear_increase_stop
+
+        if self.future_net is not None and coe_future > 0.0:
             state_future_preds = self.future_net(states, timesteps, actions, keys=key_hard)
             state_future, last_mask = self.get_future_state(states, encoding_indices)
             l_future, ls_future = get_loss(state_future_preds, state_future, lengths)
@@ -498,7 +503,7 @@ class AutoCoT(pl.LightningModule):
         self.log(name='cm', value=mask_cluster_rate, prog_bar=True, on_step=True, on_epoch=True)
 
         # need some regulation on the explicit reward (ascent reward, large at switching point)
-        l_policy = l_a_preds + self.half_linear_increase * l_future + self.coe_rec * l_s_recs
+        l_policy = l_a_preds + coe_future * l_future + self.coe_rec * l_s_recs
         if self.flag_cluster:
             # reward is the prob of completion
             # (1.0 - reward) is the prob of un-completion

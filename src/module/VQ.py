@@ -3,7 +3,6 @@ Reference: https://github.com/ritheshkumar95/pytorch-vqvae/blob/master/functions
 """
 
 import sys
-sys.path.append("/home/rzliu/AutoCoT/src/module")
 
 import torch
 import torch.nn as nn

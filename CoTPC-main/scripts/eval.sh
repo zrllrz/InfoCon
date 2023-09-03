@@ -3,8 +3,8 @@
 cd ../src &&
 
 CUDA_VISIBLE_DEVICES=5 python eval.py --eval_max_steps=200 \
-    --from_ckpt=1 --task=TurnFaucet-v0 \
-    --model_name=TF-v0-8-29-0 \
+    --from_ckpt=1640000 --task=StackCube-v0 \
+    --model_name=SC-0902 \
 
 
 #           PegInsertionSide          StackCube                 TurnFaucet                PickCube
@@ -46,8 +46,8 @@ CUDA_VISIBLE_DEVICES=5 python eval.py --eval_max_steps=200 \
 # 1_400_000 54.60%      13.50%        33.40%      17.00%                                  78.40%      72.00%
 # 1_440_000 46.20%      12.00%        33.40%      24.00%
 # 1_480_000 65.60%      14.00%
-# 1_520_000 66.40%      16.00%
-# 1_560_000 62.60%      15.50%        34.80%      22.00%
+# 1_520_000 66.40%      16.00%        57.00%      22.00%
+# 1_560_000 62.60%      15.50%        56.60%      16.00%
 # 1_600_000 54.60%      13.50%        36.80%      19.00%
 # 1_640_000 59.60%      14.50%
 # 1_680_000 55.40%      13.75%
