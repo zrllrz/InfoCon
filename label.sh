@@ -1,14 +1,38 @@
 #!/bin/bash
 
+FILE_DIR="model_checkpoints/"
+TASK=TurnFaucet-v0
+MODEL_NAME="TF_0908_0755_LONG_k4-r4-f2-c10_KT0.1_EMA0.9_ema_ave_st-emb1.2-r_l10.0-use_r-egpthn_s2_a1-emb128-key128-e128-cluster0.001-rec0.1-finetune"
+I=8100
+
 cd src &&
 
-CUDA_VISIBLE_DEVICES=0 python label.py \
-   --task=TurnFaucet-v0 --control_mode=pd_joint_delta_pos --obs_mode=state \
-   --seed=0 \
-   --n_traj=-1 \
-   --model_name=TF_0905_0734k4-r4-f2-c10_KT0.1_EMA0.9_ema_ave_st-emb1.2-r_l10.0-use_r-egpthn_s2_a1-emb128-key128-e128-cluster0.001-rec0.1-finetune \
-   --from_ckpt=2500 \
-   --pause
+while [[ $I -le 16000 ]];
+do
+  if test -e "$FILE_DIR$MODEL_NAME""/epoch""$I.pth"; then
+    CUDA_VISIBLE_DEVICES=1 python label.py \
+      --task=$TASK --control_mode=pd_joint_delta_pos --obs_mode=state \
+      --seed=0 \
+      --n_traj=-1 \
+      --model_name=$MODEL_NAME \
+      --from_ckpt=$I \
+      --pause
+    ((I+=100))
+  else
+    echo "wait"
+  fi
+done
+
+#for ((i=2000; i<=4000; i+=100));do
+#  CUDA_VISIBLE_DEVICES=2 python label.py \
+#   --task=StackCube-v0 --control_mode=pd_joint_delta_pos --obs_mode=state \
+#   --seed=0 \
+#   --n_traj=-1 \
+#   --model_name=SC_0908_0755k4-r4-f2-c10_KT0.1_EMA0.9_ema_ave_st-emb1.2-r_l10.0-use_r-egpthn_s2_a1-emb128-key128-e128-cluster0.001-rec0.1-finetune \
+#   --from_ckpt=$i \
+#   --pause
+#done
+
 
 
 
@@ -106,20 +130,51 @@ CUDA_VISIBLE_DEVICES=0 python label.py \
 # 4000  20.58             21.36       34.79         5.91
 
 
+# WODG
+#       PegInsertionSide  StackCube
+# 2000  47.99             25.62
+# 2100  47.40             25.55
+# 2200  47.28             28.99
+# 2300  40.38             31.28
+# 2400  40.22             23.11
+# 2500  37.11             29.77
+# 2600  43.33             30.90
+# 2700  46.11             40.02
+# 2800  45.41             36.68
+# 2900  45.74             24.37
+# 3000  42.49             25.94
+# 3100  35.52             24.71
+# 3200  38.18             24.84
+# 3300  46.23             23.15
+# 3400  41.11             24.79
+# 3500  41.67             23.18
+# 3600  32.06             24.92
+# 3700  41.34             24.72
+# 3800  43.96             25.72
+# 3900  36.37             24.01
+# 4000  38.57             26.80
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+# WOSG
+#       PegInsertionSide  StackCube
+# 2000  18.97             13.96
+# 2100  28.87             20.81
+# 2200  11.91             18.14
+# 2300  11.05             20.93
+# 2400  12.75             17.23
+# 2500  33.68             26.16
+# 2600  42.10             10.97
+# 2700  25.78             9.17
+# 2800  20.41             17.50
+# 2900  37.98             9.37
+# 3000  23.99             11.94
+# 3100  14.60             21.55
+# 3200  17.05             22.42
+# 3300  12.52             16.14
+# 3400  13.92            `12.35
+# 3500  19.12             9.30
+# 3600  18.36             21.78
+# 3700  23.46             6.06
+# 3800  19.43             9.39
+# 3900  16.16             26.22
+# 4000  13.01             17.14
 

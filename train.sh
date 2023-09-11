@@ -4,7 +4,7 @@ cd src &&
 
 # Example script for PickCube training (with a good set of hyper-parameters).
 # --model_name=independent-sin_k-lay_3-10_cod-smo_None-sub \
-CUDA_VISIBLE_DEVICES=4 python train.py \
+CUDA_VISIBLE_DEVICES=2 python train.py \
     --n_iters=1_616_101 --batch_size=256 \
     --init_lr=1e-4 --weight_decay=0.001 --lr_schedule=cos_decay_with_warmup --t_warmup=1000 \
     --beta1=0.9 --beta2=0.95 --coe_cluster=0.001 --coe_rec=0.1 \
@@ -12,12 +12,14 @@ CUDA_VISIBLE_DEVICES=4 python train.py \
     --n_key_layer=4 --n_rec_layer=4 --n_future_layer=2 \
     --vq_n_e=10 --vq_coe_ema=0.9 --KT=0.1 --vq_ema_ave --vq_use_st_emb --vq_st_emb_rate=1.2 --vq_coe_r_l1=0.0 --vq_use_r \
     --sa_type=egpthn --n_state_layer=2 --n_action_layer=1 --use_pos_emb \
-    --model_name=TF_0908_0755_LONG_ \
-    --task=TurnFaucet-v0 --control_mode=pd_joint_delta_pos --obs_mode=state --seed=0 \
+    --model_name=PC_0909_0909_LONG_ \
+    --task=PickCube-v0 --control_mode=pd_joint_delta_pos --obs_mode=state --seed=0 \
     --num_traj=-1 --context_length=60 --min_seq_length=60 \
     --save_every=100 --log_every=100 \
     --num_workers=6 --multiplier=26 \
     --train_mode=finetune
+
+
 
 
 

@@ -107,7 +107,7 @@ if __name__ == "__main__":
     args = parse_args()
     assert args.model_name, 'Should specify --model_name'
     assert args.from_ckpt > 0, 'Should specify --from_ckpt'
-    with open('eval_output.txt', 'a') as flog:
+    with open(args.task + '_eval_output.txt', 'a') as flog:
         flog.write(args.task + '\n')
         flog.write(args.model_name + '\n')
         flog.write(str(args.from_ckpt) + '\n')
@@ -242,7 +242,7 @@ if __name__ == "__main__":
         output_str += f'{k} {v:.2f}, '
         output_dict[k] = v
     output_str = output_str[:-2]
-    with open('eval_output.txt', 'a') as flog:
+    with open(args.task + '_eval_output.txt', 'a') as flog:
         print(output_str)
         flog.write(output_str + '\n')
 
@@ -321,7 +321,7 @@ if __name__ == "__main__":
         output_str += f'{k} {v:.2f}, '
         output_dict[k] = v
     output_str = output_str[:-2]
-    with open('eval_output.txt', 'a') as flog:
+    with open(args.task + '_eval_output.txt', 'a') as flog:
         print(output_str)
         flog.write(output_str + '\n')
 
@@ -377,7 +377,7 @@ if __name__ == "__main__":
             output_str += f'{k} {v:.2f}, '
             output_dict[k] = v
         output_str = output_str[:-2]
-        with open('eval_output.txt', 'a') as flog:
+        with open(args.task + '_eval_output.txt', 'a') as flog:
             print(output_str)
             flog.write(output_str + '\n')
 

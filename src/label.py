@@ -77,6 +77,9 @@ if __name__ == "__main__":
     assert args.model_name, 'Should specify --model_name'
     assert args.from_ckpt > 0, 'Should specify --from_ckpt'
 
+    with open(args.task + '_label_output.txt', 'a') as flabel:
+        flabel.write(args.model_name + '_' + str(args.from_ckpt) + '\n')
+
     # Load the module.
     path = os.path.join(MODEL_PATH, f'{args.model_name}/epoch{args.from_ckpt}.pth')
     # Load to cpu first to avoid cuda related errors from ManiSkill2.
@@ -366,7 +369,7 @@ if __name__ == "__main__":
 
     bias_sum = 0.0
 
-    with open(traj_save_keys_path + '/keys-0907.txt', 'w') as fk:
+    with open(traj_save_keys_path + '/keys-0910.txt', 'w') as fk:
         for i_traj in range(length):
             traj_state = dataset['obs'][i_traj]
             traj_action = dataset['actions'][i_traj]
@@ -446,3 +449,5 @@ if __name__ == "__main__":
             fk.write('\n')
 
     print('average bias', bias_sum / length)
+    with open(args.task + '_label_output.txt', 'a') as flabel:
+        flabel.write('average bias' + str(bias_sum / length) + '\n')
