@@ -369,7 +369,7 @@ if __name__ == "__main__":
 
     bias_sum = 0.0
 
-    with open(traj_save_keys_path + '/keys-0910.txt', 'w') as fk:
+    with open(traj_save_keys_path + '/keys-long5.txt', 'w') as fk:
         for i_traj in range(length):
             traj_state = dataset['obs'][i_traj]
             traj_action = dataset['actions'][i_traj]

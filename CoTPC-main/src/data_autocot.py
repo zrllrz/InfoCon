@@ -35,7 +35,7 @@ class MS2Demos(Dataset):
         self.max_steps = -1  # Maximum timesteps across all trajectories.
         traj_path = os.path.join(DATA_PATH,
                                  f'{task}/trajectory.{obs_mode}.{control_mode}.h5')
-        key_path = os.path.join(DATA_PATH, f'{task}/keys-0909.txt')
+        key_path = os.path.join(DATA_PATH, f'{task}/keys-long3.txt')
         print('Traj path:', traj_path)
         print('Key path:', key_path)
         self.data = self.load_demo_dataset(traj_path, key_path, length)

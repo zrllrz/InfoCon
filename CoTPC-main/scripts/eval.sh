@@ -1,9 +1,9 @@
 #!/bin/bash
 
 MODEL_DIR="../save_model/"
-TASK="TurnFaucet-v0"
-MODEL_NAME="TF-0907"
-I=2000000
+TASK="PegInsertionSide-v0"
+MODEL_NAME="PIS-0912-WOGG"
+I=10000
 
 cd ../src &&
 
@@ -15,12 +15,12 @@ while [[ $I -le 3600000 ]];
 do
   echo "$MODEL_DIR$MODEL_NAME""/""$I.pth"
   if test -e "$MODEL_DIR$MODEL_NAME""/""$I.pth"; then
-    CUDA_VISIBLE_DEVICES=4 python eval.py \
-      --eval_max_steps=300 \
+    CUDA_VISIBLE_DEVICES=3 python eval.py \
+      --eval_max_steps=230 \
       --from_ckpt=$I \
       --task=$TASK \
       --model_name=$MODEL_NAME
-    ((I+=20000))
+    ((I+=10000))
   else
     echo "wait"
   fi

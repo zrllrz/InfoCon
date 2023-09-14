@@ -4,6 +4,9 @@ TASK="StackCube-v0"
 
 cd ../src &&
 
-CUDA_VISIBLE_DEVICES=4 python rgbd.py \
-      --task=$TASK \
-      --idx=0
+for ((i=0; i<100; i++));do
+  CUDA_VISIBLE_DEVICES=0 python rgbd.py \
+    --task=$TASK \
+    --idx=$i \
+    --use_hand_camera
+done

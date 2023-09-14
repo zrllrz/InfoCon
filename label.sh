@@ -2,8 +2,8 @@
 
 FILE_DIR="model_checkpoints/"
 TASK=TurnFaucet-v0
-MODEL_NAME="TF_0908_0755_LONG_k4-r4-f2-c10_KT0.1_EMA0.9_ema_ave_st-emb1.2-r_l10.0-use_r-egpthn_s2_a1-emb128-key128-e128-cluster0.001-rec0.1-finetune"
-I=8100
+MODEL_NAME="TF_0912_LONG_k4-r4-f2-c10_KT0.1_EMA0.9_ema_ave_st-emb1.2-r_l10.0-use_r-egpthn_s2_a1-emb128-key128-e128-cluster0.001-rec0.1-finetune"
+I=100
 
 cd src &&
 
@@ -15,8 +15,7 @@ do
       --seed=0 \
       --n_traj=-1 \
       --model_name=$MODEL_NAME \
-      --from_ckpt=$I \
-      --pause
+      --from_ckpt=$I
     ((I+=100))
   else
     echo "wait"

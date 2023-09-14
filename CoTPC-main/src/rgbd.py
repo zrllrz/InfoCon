@@ -21,6 +21,7 @@ def parse_args():
     # Hyper-parameters regarding the demo dataset (used to gather eval_ids)
     parser.add_argument('--task', type=str, default='PegInsertionSide-v0', help="Task (env-id) in ManiSkill2.")
     parser.add_argument("--idx", default=0, type=int, help="which idx")
+    parser.add_argument("--use_hand_camera", action='store_true', help='use hand camera')
 
     return parser.parse_args()
 
@@ -44,9 +45,13 @@ if __name__ == "__main__":
 
     ids = np.arange(length)
 
-    print(torch.from_numpy(np.array(traj_all[f"traj_{args.idx}"]["obs"]['image']['base_camera']['rgb'])).shape)
+    if args.use_hand_camera:
+        use_camera = 'hand_camera'
+    else:
+        use_camera = 'base_camera'
 
-    frames = torch.from_numpy(np.array(traj_all[f"traj_{args.idx}"]["obs"]['image']['base_camera']['rgb']))
+    print(torch.from_numpy(np.array(traj_all[f"traj_{args.idx}"]["obs"]['image'][use_camera]['rgb'])).shape)
+    frames = torch.from_numpy(np.array(traj_all[f"traj_{args.idx}"]["obs"]['image'][use_camera]['rgb']))
     key_frames = list()
 
     with open(traj_save_keys_path + '/keys-0909.txt', 'r') as fk:
@@ -68,4 +73,4 @@ if __name__ == "__main__":
     if not os.path.exists("vis_key_states/" + args.task):
         os.makedirs("vis_key_states/" + args.task)
 
-    key_frames_img.save("vis_key_states/" + args.task + "/test.jpg")
+    key_frames_img.save("vis_key_states/" + args.task + f"/{args.idx}_" + use_camera + ".jpg")
