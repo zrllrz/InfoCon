@@ -1,0 +1,48 @@
+StackCube-v0
+SC-0915-SHORT
+1640000
+success 61.80
+test/success 30.00
+StackCube-v0
+SC-0915-SHORT
+1638000
+success 66.80
+test/success 30.00
+StackCube-v0
+SC-0915-SHORT
+1636000
+success 61.40
+test/success 27.00
+StackCube-v0
+SC-0915-SHORT
+1634000
+success 63.00
+test/success 27.00
+StackCube-v0
+SC-0915-SHORT
+1632000
+success 63.20
+test/success 28.00
+StackCube-v0
+SC-0915-SHORT
+1630000
+success 62.00
+test/success 28.00
+StackCube-v0
+SC-0915-SHORT
+1628000
+success 65.60
+test/success 32.00
+StackCube-v0
+SC-0915-SHORT
+1626000
+success 62.80
+test/success 36.00
+StackCube-v0
+SC-0915-SHORT
+1624000
+success 62.80
+test/success 34.00
+StackCube-v0
+SC-0915-SHORT
+1622000

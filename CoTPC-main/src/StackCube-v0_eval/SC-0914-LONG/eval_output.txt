@@ -1,0 +1,969 @@
+StackCube-v0
+SC-0914-LONG
+2000
+success 0.00
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+4000
+success 0.00
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+6000
+success 0.20
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+8000
+success 0.60
+test/success 2.00
+StackCube-v0
+SC-0914-LONG
+10000
+success 0.20
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+12000
+success 1.00
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+14000
+success 0.60
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+16000
+success 0.20
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+18000
+success 0.20
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+20000
+success 0.80
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+22000
+success 0.20
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+24000
+success 0.80
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+26000
+success 0.00
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+28000
+success 1.80
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+30000
+success 0.40
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+32000
+success 3.20
+test/success 4.00
+StackCube-v0
+SC-0914-LONG
+34000
+success 2.00
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+36000
+success 3.60
+test/success 4.00
+StackCube-v0
+SC-0914-LONG
+38000
+success 0.60
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+40000
+success 0.80
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+42000
+success 1.20
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+44000
+success 4.40
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+46000
+success 0.20
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+48000
+success 6.00
+test/success 6.00
+StackCube-v0
+SC-0914-LONG
+50000
+success 3.40
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+52000
+success 2.00
+test/success 6.00
+StackCube-v0
+SC-0914-LONG
+54000
+success 1.40
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+56000
+success 3.40
+test/success 7.00
+StackCube-v0
+SC-0914-LONG
+58000
+success 6.60
+test/success 6.00
+StackCube-v0
+SC-0914-LONG
+60000
+success 1.40
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+62000
+success 2.00
+test/success 2.00
+StackCube-v0
+SC-0914-LONG
+64000
+success 3.00
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+66000
+success 2.20
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+68000
+success 6.40
+test/success 8.00
+StackCube-v0
+SC-0914-LONG
+70000
+success 2.80
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+72000
+success 1.20
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+74000
+success 1.40
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+76000
+success 1.20
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+78000
+success 1.00
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+80000
+success 3.80
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+82000
+success 3.00
+test/success 6.00
+StackCube-v0
+SC-0914-LONG
+84000
+success 1.20
+test/success 3.00
+StackCube-v0
+SC-0914-LONG
+86000
+success 1.60
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+88000
+success 6.20
+test/success 3.00
+StackCube-v0
+SC-0914-LONG
+90000
+success 4.80
+test/success 4.00
+StackCube-v0
+SC-0914-LONG
+92000
+success 5.40
+test/success 9.00
+StackCube-v0
+SC-0914-LONG
+94000
+success 1.60
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+96000
+success 13.40
+test/success 13.00
+StackCube-v0
+SC-0914-LONG
+98000
+success 0.20
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+100000
+success 9.80
+test/success 7.00
+StackCube-v0
+SC-0914-LONG
+102000
+success 0.20
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+104000
+success 9.80
+test/success 8.00
+StackCube-v0
+SC-0914-LONG
+106000
+success 3.40
+test/success 4.00
+StackCube-v0
+SC-0914-LONG
+108000
+success 1.80
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+110000
+success 3.20
+test/success 2.00
+StackCube-v0
+SC-0914-LONG
+112000
+success 3.20
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+114000
+success 2.20
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+116000
+success 10.60
+test/success 9.00
+StackCube-v0
+SC-0914-LONG
+118000
+success 3.20
+test/success 2.00
+StackCube-v0
+SC-0914-LONG
+120000
+success 14.00
+test/success 9.00
+StackCube-v0
+SC-0914-LONG
+122000
+success 2.40
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+124000
+success 12.20
+test/success 12.00
+StackCube-v0
+SC-0914-LONG
+126000
+success 1.00
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+128000
+success 6.80
+test/success 3.00
+StackCube-v0
+SC-0914-LONG
+130000
+success 5.00
+test/success 2.00
+StackCube-v0
+SC-0914-LONG
+132000
+success 13.80
+test/success 8.00
+StackCube-v0
+SC-0914-LONG
+134000
+success 11.20
+test/success 8.00
+StackCube-v0
+SC-0914-LONG
+136000
+success 8.60
+test/success 4.00
+StackCube-v0
+SC-0914-LONG
+138000
+success 9.20
+test/success 9.00
+StackCube-v0
+SC-0914-LONG
+140000
+success 6.40
+test/success 3.00
+StackCube-v0
+SC-0914-LONG
+142000
+success 11.20
+test/success 11.00
+StackCube-v0
+SC-0914-LONG
+144000
+success 12.20
+test/success 12.00
+StackCube-v0
+SC-0914-LONG
+146000
+success 7.60
+test/success 4.00
+StackCube-v0
+SC-0914-LONG
+148000
+success 0.20
+test/success 2.00
+StackCube-v0
+SC-0914-LONG
+150000
+success 2.40
+test/success 4.00
+StackCube-v0
+SC-0914-LONG
+152000
+success 12.40
+test/success 8.00
+StackCube-v0
+SC-0914-LONG
+154000
+success 10.20
+test/success 5.00
+StackCube-v0
+SC-0914-LONG
+156000
+success 5.20
+test/success 3.00
+StackCube-v0
+SC-0914-LONG
+158000
+success 18.00
+test/success 11.00
+StackCube-v0
+SC-0914-LONG
+160000
+success 12.60
+test/success 10.00
+StackCube-v0
+SC-0914-LONG
+162000
+success 3.00
+test/success 5.00
+StackCube-v0
+SC-0914-LONG
+164000
+success 17.00
+test/success 18.00
+StackCube-v0
+SC-0914-LONG
+166000
+success 16.00
+test/success 10.00
+StackCube-v0
+SC-0914-LONG
+168000
+success 2.20
+test/success 1.00
+StackCube-v0
+SC-0914-LONG
+170000
+success 11.20
+test/success 7.00
+StackCube-v0
+SC-0914-LONG
+172000
+success 5.40
+test/success 2.00
+StackCube-v0
+SC-0914-LONG
+174000
+success 6.80
+test/success 10.00
+StackCube-v0
+SC-0914-LONG
+176000
+success 15.20
+test/success 10.00
+StackCube-v0
+SC-0914-LONG
+178000
+success 16.80
+test/success 7.00
+StackCube-v0
+SC-0914-LONG
+180000
+success 6.00
+test/success 0.00
+StackCube-v0
+SC-0914-LONG
+182000
+success 5.60
+test/success 3.00
+StackCube-v0
+SC-0914-LONG
+184000
+success 9.00
+test/success 8.00
+StackCube-v0
+SC-0914-LONG
+186000
+success 2.80
+test/success 2.00
+StackCube-v0
+SC-0914-LONG
+188000
+success 18.20
+test/success 11.00
+StackCube-v0
+SC-0914-LONG
+190000
+success 17.40
+test/success 17.00
+StackCube-v0
+SC-0914-LONG
+192000
+success 4.60
+test/success 4.00
+StackCube-v0
+SC-0914-LONG
+194000
+success 33.40
+test/success 23.00
+StackCube-v0
+SC-0914-LONG
+196000
+success 22.00
+test/success 15.00
+StackCube-v0
+SC-0914-LONG
+198000
+success 17.40
+test/success 16.00
+StackCube-v0
+SC-0914-LONG
+200000
+success 8.40
+test/success 5.00
+StackCube-v0
+SC-0914-LONG
+202000
+success 21.00
+test/success 19.00
+StackCube-v0
+SC-0914-LONG
+204000
+success 19.80
+test/success 15.00
+StackCube-v0
+SC-0914-LONG
+206000
+success 19.60
+test/success 6.00
+StackCube-v0
+SC-0914-LONG
+208000
+success 16.20
+test/success 14.00
+StackCube-v0
+SC-0914-LONG
+210000
+success 16.00
+test/success 13.00
+StackCube-v0
+SC-0914-LONG
+212000
+success 4.80
+test/success 4.00
+StackCube-v0
+SC-0914-LONG
+214000
+success 7.40
+test/success 4.00
+StackCube-v0
+SC-0914-LONG
+216000
+success 7.80
+test/success 5.00
+StackCube-v0
+SC-0914-LONG
+218000
+success 22.60
+test/success 14.00
+StackCube-v0
+SC-0914-LONG
+220000
+success 25.20
+test/success 20.00
+StackCube-v0
+SC-0914-LONG
+222000
+success 12.40
+test/success 9.00
+StackCube-v0
+SC-0914-LONG
+224000
+success 23.40
+test/success 16.00
+StackCube-v0
+SC-0914-LONG
+226000
+success 27.40
+test/success 23.00
+StackCube-v0
+SC-0914-LONG
+228000
+success 8.40
+test/success 5.00
+StackCube-v0
+SC-0914-LONG
+230000
+success 19.20
+test/success 17.00
+StackCube-v0
+SC-0914-LONG
+232000
+success 9.20
+test/success 7.00
+StackCube-v0
+SC-0914-LONG
+234000
+success 14.40
+test/success 13.00
+StackCube-v0
+SC-0914-LONG
+236000
+success 8.00
+test/success 9.00
+StackCube-v0
+SC-0914-LONG
+238000
+success 22.60
+test/success 14.00
+StackCube-v0
+SC-0914-LONG
+240000
+success 27.20
+test/success 15.00
+StackCube-v0
+SC-0914-LONG
+242000
+success 19.20
+test/success 17.00
+StackCube-v0
+SC-0914-LONG
+244000
+success 4.20
+test/success 3.00
+StackCube-v0
+SC-0914-LONG
+246000
+success 15.40
+test/success 17.00
+StackCube-v0
+SC-0914-LONG
+248000
+success 6.60
+test/success 8.00
+StackCube-v0
+SC-0914-LONG
+250000
+success 26.40
+test/success 19.00
+StackCube-v0
+SC-0914-LONG
+252000
+success 8.00
+test/success 7.00
+StackCube-v0
+SC-0914-LONG
+254000
+success 17.20
+test/success 15.00
+StackCube-v0
+SC-0914-LONG
+256000
+success 24.60
+test/success 17.00
+StackCube-v0
+SC-0914-LONG
+258000
+success 34.60
+test/success 23.00
+StackCube-v0
+SC-0914-LONG
+260000
+success 10.20
+test/success 13.00
+StackCube-v0
+SC-0914-LONG
+262000
+success 3.80
+test/success 3.00
+StackCube-v0
+SC-0914-LONG
+264000
+success 26.00
+test/success 20.00
+StackCube-v0
+SC-0914-LONG
+266000
+success 28.60
+test/success 22.00
+StackCube-v0
+SC-0914-LONG
+268000
+success 23.20
+test/success 10.00
+StackCube-v0
+SC-0914-LONG
+270000
+success 16.20
+test/success 13.00
+StackCube-v0
+SC-0914-LONG
+272000
+success 11.20
+test/success 12.00
+StackCube-v0
+SC-0914-LONG
+274000
+success 15.00
+test/success 8.00
+StackCube-v0
+SC-0914-LONG
+276000
+success 26.60
+test/success 28.00
+StackCube-v0
+SC-0914-LONG
+278000
+success 17.40
+test/success 10.00
+StackCube-v0
+SC-0914-LONG
+280000
+success 28.60
+test/success 28.00
+StackCube-v0
+SC-0914-LONG
+282000
+success 30.40
+test/success 30.00
+StackCube-v0
+SC-0914-LONG
+284000
+success 21.20
+test/success 13.00
+StackCube-v0
+SC-0914-LONG
+286000
+success 37.40
+test/success 26.00
+StackCube-v0
+SC-0914-LONG
+288000
+success 12.60
+test/success 6.00
+StackCube-v0
+SC-0914-LONG
+290000
+success 14.80
+test/success 14.00
+StackCube-v0
+SC-0914-LONG
+292000
+success 26.00
+test/success 13.00
+StackCube-v0
+SC-0914-LONG
+294000
+success 27.00
+test/success 16.00
+StackCube-v0
+SC-0914-LONG
+296000
+success 15.40
+test/success 15.00
+StackCube-v0
+SC-0914-LONG
+298000
+success 16.80
+test/success 12.00
+StackCube-v0
+SC-0914-LONG
+300000
+success 31.40
+test/success 16.00
+StackCube-v0
+SC-0914-LONG
+302000
+success 18.60
+test/success 10.00
+StackCube-v0
+SC-0914-LONG
+304000
+success 15.20
+test/success 18.00
+StackCube-v0
+SC-0914-LONG
+306000
+success 17.00
+test/success 9.00
+StackCube-v0
+SC-0914-LONG
+308000
+success 16.40
+test/success 13.00
+StackCube-v0
+SC-0914-LONG
+310000
+success 15.80
+test/success 12.00
+StackCube-v0
+SC-0914-LONG
+312000
+success 15.80
+test/success 19.00
+StackCube-v0
+SC-0914-LONG
+314000
+success 5.80
+test/success 13.00
+StackCube-v0
+SC-0914-LONG
+316000
+success 21.40
+test/success 15.00
+StackCube-v0
+SC-0914-LONG
+318000
+success 29.00
+test/success 29.00
+StackCube-v0
+SC-0914-LONG
+320000
+success 3.60
+test/success 2.00
+StackCube-v0
+SC-0914-LONG
+322000
+success 16.40
+test/success 9.00
+StackCube-v0
+SC-0914-LONG
+324000
+success 37.40
+test/success 27.00
+StackCube-v0
+SC-0914-LONG
+326000
+success 38.80
+test/success 23.00
+StackCube-v0
+SC-0914-LONG
+328000
+success 30.80
+test/success 18.00
+StackCube-v0
+SC-0914-LONG
+330000
+success 27.00
+test/success 24.00
+StackCube-v0
+SC-0914-LONG
+332000
+success 2.40
+test/success 2.00
+StackCube-v0
+SC-0914-LONG
+334000
+success 29.20
+test/success 14.00
+StackCube-v0
+SC-0914-LONG
+336000
+success 37.00
+test/success 25.00
+StackCube-v0
+SC-0914-LONG
+338000
+success 26.60
+test/success 21.00
+StackCube-v0
+SC-0914-LONG
+340000
+success 25.00
+test/success 22.00
+StackCube-v0
+SC-0914-LONG
+342000
+success 17.20
+test/success 14.00
+StackCube-v0
+SC-0914-LONG
+344000
+success 26.80
+test/success 22.00
+StackCube-v0
+SC-0914-LONG
+346000
+success 18.80
+test/success 14.00
+StackCube-v0
+SC-0914-LONG
+348000
+success 32.40
+test/success 27.00
+StackCube-v0
+SC-0914-LONG
+350000
+success 35.20
+test/success 26.00
+StackCube-v0
+SC-0914-LONG
+352000
+success 32.00
+test/success 35.00
+StackCube-v0
+SC-0914-LONG
+354000
+success 11.00
+test/success 5.00
+StackCube-v0
+SC-0914-LONG
+356000
+success 5.00
+test/success 3.00
+StackCube-v0
+SC-0914-LONG
+358000
+success 18.20
+test/success 16.00
+StackCube-v0
+SC-0914-LONG
+360000
+success 28.60
+test/success 17.00
+StackCube-v0
+SC-0914-LONG
+362000
+success 16.60
+test/success 18.00
+StackCube-v0
+SC-0914-LONG
+364000
+success 24.60
+test/success 20.00
+StackCube-v0
+SC-0914-LONG
+366000
+success 28.40
+test/success 19.00
+StackCube-v0
+SC-0914-LONG
+368000
+success 19.40
+test/success 15.00
+StackCube-v0
+SC-0914-LONG
+370000
+success 16.00
+test/success 10.00
+StackCube-v0
+SC-0914-LONG
+372000
+success 21.60
+test/success 21.00
+StackCube-v0
+SC-0914-LONG
+374000
+success 33.00
+test/success 24.00
+StackCube-v0
+SC-0914-LONG
+376000
+success 33.60
+test/success 14.00
+StackCube-v0
+SC-0914-LONG
+378000
+success 27.80
+test/success 20.00
+StackCube-v0
+SC-0914-LONG
+380000
+success 26.00
+test/success 23.00
+StackCube-v0
+SC-0914-LONG
+382000
+success 8.60
+test/success 7.00
+StackCube-v0
+SC-0914-LONG
+384000
+success 32.60
+test/success 22.00
+StackCube-v0
+SC-0914-LONG
+386000
+success 22.80
+test/success 23.00
+StackCube-v0
+SC-0914-LONG
+388000
+success 29.20
