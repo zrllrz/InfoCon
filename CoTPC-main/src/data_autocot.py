@@ -30,12 +30,13 @@ class MS2Demos(Dataset):
         self.max_seq_length = max_seq_length  # For sampling trajectories.
         self.with_key_states = with_key_states  # Whether output key states.
         self.multiplier = multiplier
+        self.control_mode = control_mode
 
         # Usually set min and max traj length to be the same value.
         self.max_steps = -1  # Maximum timesteps across all trajectories.
         traj_path = os.path.join(DATA_PATH,
                                  f'{task}/trajectory.{obs_mode}.{control_mode}.h5')
-        key_path = os.path.join(DATA_PATH, f'{task}/keys-long3.txt')
+        key_path = os.path.join(DATA_PATH, f'{task}/keys-waypoint.txt')
         print('Traj path:', traj_path)
         print('Key path:', key_path)
         self.data = self.load_demo_dataset(traj_path, key_path, length)
@@ -96,7 +97,7 @@ class MS2Demos(Dataset):
             length = len(traj_all)
         np.random.seed(self.seed)  # Fix the random seed for train/test data split.
 
-        # Since TurnFaucet uses 10 different faucet models, we shuffle the data
+        # Since TurnFaucet-v0 uses 10 different faucet models, we shuffle the data
         # such that the resulting sampled data are evenly sampled across faucet models.
         if self.task == 'TurnFaucet-v0':
             ids = []
@@ -123,10 +124,20 @@ class MS2Demos(Dataset):
         # And most `infos` is for the next obs rather than the current obs.
 
         # `env_states` is used for reseting the env (might be helpful for eval)
+        # `obs` is the observation of each step.
+        # dataset['obs'] = [np.array(traj_all[f"traj_{i}"]["obs"]) for i in ids]
+        # if self.control_mode == 'pd_joint_delta_pos':
+        #     dataset['obs'] = [np.concatenate([np.array(traj_all[f"traj_{i}"]["obs"])[:, :9],
+        #                                       np.array(traj_all[f"traj_{i}"]["obs"])[:, 18:],], -1) for i in ids]
+        # elif self.control_mode == 'base_pd_joint_vel_arm_pd_joint_vel':
+        #     slices = [slice(0, 19), slice(38, 41), slice(44, 51), slice(57, 82), slice(107, 119)]
+        #     dataset['obs'] = [np.concatenate([np.array(traj_all[f"traj_{i}"]["obs"])[:, s] for s in slices], -1) for i in ids]
+        # else:
+
+        dataset['obs'] = [np.array(traj_all[f"traj_{i}"]["obs"]) for i in ids]
+
         dataset['env_states'] = [np.array(
             traj_all[f"traj_{i}"]['env_states']) for i in ids]
-        # `obs` is the observation of each step.
-        dataset['obs'] = [np.array(traj_all[f"traj_{i}"]["obs"]) for i in ids]
         dataset['actions'] = [np.array(traj_all[f"traj_{i}"]["actions"]) for i in ids]
 
         # actions = np.concatenate(dataset['actions'])

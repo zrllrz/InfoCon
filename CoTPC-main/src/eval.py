@@ -43,6 +43,13 @@ def predict(model, action_hist, state_hist, t):
         actions = torch.stack(action_hist, 1).float().cuda()
     states = torch.stack(state_hist, 1).float().cuda()
 
+    '''
+    dataset['obs'] = [np.concatenate([np.array(traj_all[f"traj_{i}"]["obs"])[:, :9],
+                                              np.array(traj_all[f"traj_{i}"]["obs"])[:, 18:],], -1) for i in ids]
+    '''
+    # discard noisy feature
+    # states = torch.cat([states[..., :9], states[..., 18:]], dim=-1)
+
     if 'cot' in model.model_type:
         # T is the max sequence size; S is the current number of steps.
         B, T = states.shape[0], model.block_size + model.len_key_states
@@ -98,6 +105,7 @@ def parse_args():
 
     parser.add_argument("--eval_max_steps", default=200, type=int, help="Max steps allowed in eval.")
     parser.add_argument('--cot_decoder', type=str, default='256', help="Specs of the CoT decoder.")
+    parser.add_argument('--n_env', type=int, default=25, help="Num of process for eval.")
 
     return parser.parse_args()
 
@@ -111,11 +119,10 @@ if __name__ == "__main__":
     if not os.path.exists(args.task + '_eval/' + args.model_name + f'_max_step_{args.eval_max_steps}'):
         os.makedirs(args.task + '_eval/' + args.model_name + f'_max_step_{args.eval_max_steps}')
 
-
-    with open(args.task + '_eval/' + args.model_name + f'_max_step_{args.eval_max_steps}' + '/eval_output.txt', 'a') as flog:
-        flog.write(args.task + '\n')
-        flog.write(args.model_name + '\n')
-        flog.write(str(args.from_ckpt) + '\n')
+    path_flog = args.task + '_eval/' + args.model_name + f'_max_step_{args.eval_max_steps}' + '/eval_output.txt'
+    print('log path:\n', path_flog)
+    flog = open(path_flog, 'a')
+    flog.write(args.task + ' ' + args.model_name + ' ' + str(args.from_ckpt) + '\n')
 
     # Load the model.
     path = os.path.join(MODEL_PATH, f'{args.model_name}/{args.from_ckpt}.pth')
@@ -129,8 +136,8 @@ if __name__ == "__main__":
     print('state_dim', state_dim)
 
     if 'cot' in params['model_type']:
-        assert (params['vq_n_e'] != 0) or params['key_states'], 'Should specify --key_states.'
-        if params['vq_n_e'] != 0:
+        assert ('vq_n_e' in params.keys() and params['vq_n_e'] != 0) or params['key_states'], 'Should specify --key_states.'
+        if 'vq_n_e' in params.keys() and params['vq_n_e'] != 0:
             key_states_dict = \
                 code_book_len_to_key_state_mark(length=params['vq_n_e'],
                                                 key_state_loss_str=params['key_state_loss'])
@@ -172,11 +179,9 @@ if __name__ == "__main__":
         eval_ids = np.random.permutation(
             len(json_data["episodes"]))[:params['num_traj']][:500]
 
-    n_env = 25  # Number of parallel environments.
+    n_env = args.n_env  # Number of parallel environments.
     assert len(eval_ids) % n_env == 0, f'{len(eval_ids)}'
-    print('before get_mp_envs')
     envs = get_mp_envs(args.task, n_env, **env_kwargs)
-    print('after get_mp_envs')
 
     # Load the ckpt after envs init to avoid cuda related errors from ManiSkill2.
     cot_decoder = params['cot_decoder'] if 'cot_decoder' in params else args.cot_decoder
@@ -247,9 +252,8 @@ if __name__ == "__main__":
         output_str += f'{k} {v:.2f}, '
         output_dict[k] = v
     output_str = output_str[:-2]
-    with open(args.task + '_eval/' + args.model_name + f'_max_step_{args.eval_max_steps}' + '/eval_output.txt', 'a') as flog:
-        print(output_str)
-        flog.write(output_str + '\n')
+    print(output_str)
+    flog.write(output_str + '\n')
 
     # Unseen scene configurations.
     # Unseen objects for peg insertion and seen objects otherwise.
@@ -326,9 +330,8 @@ if __name__ == "__main__":
         output_str += f'{k} {v:.2f}, '
         output_dict[k] = v
     output_str = output_str[:-2]
-    with open(args.task + '_eval/' + args.model_name + f'_max_step_{args.eval_max_steps}' + '/eval_output.txt', 'a') as flog:
-        print(output_str)
-        flog.write(output_str + '\n')
+    print(output_str)
+    flog.write(output_str + '\n')
 
     # Unseen scene configurations with unseen objects (zero-shot).
     all_reset_kwargs = []
@@ -382,10 +385,11 @@ if __name__ == "__main__":
             output_str += f'{k} {v:.2f}, '
             output_dict[k] = v
         output_str = output_str[:-2]
-        with open(args.task + '_eval/' + args.model_name + f'_max_step_{args.eval_max_steps}' + '/eval_output.txt', 'a') as flog:
-            print(output_str)
-            flog.write(output_str + '\n')
+        print(output_str)
+        flog.write(output_str + '\n')
 
         if USE_WANDB:
             output_dict['n_iter'] = args.from_ckpt
             wandb.log(output_dict)
+
+    flog.close()

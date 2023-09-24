@@ -266,3 +266,8 @@ test/success 16.00
 StackCube-v0
 SC-0912-WODG
 540000
+StackCube-v0
+SC-0912-WODG
+1610000
+success 57.40
+test/success 23.00

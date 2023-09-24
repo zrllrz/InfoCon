@@ -1,18 +1,19 @@
 #!/bin/bash
 
-TASK=PegInsertionSide-v0
-MODEL_NAME="PIS_0905_0734k4-r4-f2-c10_KT0.1_EMA0.9_ema_ave_st-emb1.2-r_l10.0-use_r-egpthn_s2_a1-emb128-key128-e128-cluster0.001-rec0.1-finetune"
-I=2200
+TASK=PickCube-v0
+MODEL_NAME=PC_0906_1003k4-r4-f2-c10_KT0.1_EMA0.9_ema_ave_st-emb1.2-r_l10.0-use_r-egpthn_s2_a1-emb128-key128-e128-cluster0.001-rec0.1-finetune
+I=4000
 
 
 cd src &&
 
-CUDA_VISIBLE_DEVICES=1 python label.py \
+CUDA_VISIBLE_DEVICES=2 python label.py \
   --task=$TASK --control_mode=pd_joint_delta_pos --obs_mode=state \
   --seed=0 \
   --n_traj=-1 \
   --model_name=$MODEL_NAME \
   --from_ckpt=$I \
+
 
 # for ((i=2000; i<=4000; i+=100));do
 #  CUDA_VISIBLE_DEVICES=2 python label.py \
@@ -28,7 +29,7 @@ CUDA_VISIBLE_DEVICES=1 python label.py \
 
 
 # 0902
-#       PegInsertionSide    StackCube   TurnFaucet
+#       PegInsertionSide    StackCube   TurnFaucet-v0
 # 2000
 # 2100
 # 2200
@@ -54,7 +55,7 @@ CUDA_VISIBLE_DEVICES=1 python label.py \
 
 
 # 0904
-#       PegInsertionSide    StackCube   TurnFaucet
+#       PegInsertionSide    StackCube   TurnFaucet-v0
 # 3000  24.24               21.46       18.03
 # 3100  15.02               24.16       31.76
 # 3200  9.34                19.65       30.88
@@ -72,7 +73,7 @@ CUDA_VISIBLE_DEVICES=1 python label.py \
 
 
 # 0904
-#       PegInsertionSide    StackCube   TurnFaucet    PickCube
+#       PegInsertionSide    StackCube   TurnFaucet-v0    PickCube
 # 2000  13.07               13.86       22.75         \
 # 2100  8.48                13.06       29.65         \
 # 2200  6.80                16.92       31.63         5.87
@@ -97,7 +98,7 @@ CUDA_VISIBLE_DEVICES=1 python label.py \
 
 
 # 0905
-#       PegInsertionSide  StackCube   TurnFaucet    PickCube
+#       PegInsertionSide  StackCube   TurnFaucet-v0    PickCube
 # 2000  13.07             \           \             \
 # 2100  8.48              \           27.04         \
 # 2200  6.80              \           31.55         5.87

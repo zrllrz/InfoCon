@@ -121,7 +121,7 @@ class MS2Demos(Dataset):
             length = len(traj_all)
         np.random.seed(self.seed)  # Fix the random seed for train/test data split.
 
-        # Since TurnFaucet uses 10 different faucet models, we shuffle the data
+        # Since TurnFaucet-v0 uses 10 different faucet models, we shuffle the data
         # such that the resulting sampled data are evenly sampled across faucet models.
         if self.task == 'TurnFaucet-v0':
             ids = []
@@ -188,7 +188,7 @@ class MS2Demos(Dataset):
         key_states = []
         key_states_idx = []
 
-        # If TurnFaucet (two key states)
+        # If TurnFaucet-v0 (two key states)
         # key state I: is_contacted -> true
         # key state II: end of the trajectory
         if self.task == 'TurnFaucet-v0':

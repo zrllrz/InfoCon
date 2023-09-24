@@ -109,7 +109,7 @@ if __name__ == "__main__":
         length = len(traj_all)
     # np.random.seed(args.seed)
     # # If you use the same seed, you can get same trajectory choice
-    # # Since TurnFaucet uses 10 different faucet models, we shuffle the data
+    # # Since TurnFaucet-v0 uses 10 different faucet models, we shuffle the data
     # # such that the resulting sampled data are evenly sampled across faucet models.
     # if args.task == 'TurnFaucet-v0':
     #     ids = []
@@ -154,7 +154,7 @@ if __name__ == "__main__":
                 dataset[f'infos/demo_{kk}'] = [np.array(
                     traj_all[f"traj_{i}"]["infos"][k][kk]) for i in ids]
 
-    # If TurnFaucet (two key states)
+    # If TurnFaucet-v0 (two key states)
     # key state I: is_contacted -> true
     # key state II: end of the trajectory
     if args.task == 'TurnFaucet-v0':

@@ -93,9 +93,9 @@ class MS2Demos(Dataset):
             length = len(traj_all)
         np.random.seed(self.seed)  # Fix the random seed for train/test data split.
 
-        # Since TurnFaucet uses 10 different faucet models, we shuffle the data
+        # Since TurnFaucet-v0 uses 10 different faucet models, we shuffle the data
         # such that the resulting sampled data are evenly sampled across faucet models.
-        if self.task == 'TurnFaucet-v0':
+        if self.task == 'TurnFaucet-v0-v0':
             ids = []
             for i in range(10):  # Hard-code the 10 data splits for permutation.
                 t_ids = np.random.permutation(len(traj_all) // 10)[:length // 10]
@@ -150,10 +150,10 @@ class MS2Demos(Dataset):
         # Thus, we need to offset the `step_idx`` by one.
         key_states = []
 
-        # If TurnFaucet (two key states)
+        # If TurnFaucet-v0 (two key states)
         # key state I: is_contacted -> true
         # key state II: end of the trajectory
-        if self.task == 'TurnFaucet-v0':
+        if self.task == 'TurnFaucet-v0-v0':
             for step_idx, key in enumerate(self.data['infos/is_contacted'][idx]):
                 if key: break
             key_states.append(self.data['obs'][idx][step_idx + 1].astype(np.float32))

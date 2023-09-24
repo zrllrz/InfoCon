@@ -1,20 +1,22 @@
 #!/bin/bash
 
-TASK="PegInsertionSide-v0"
-MODEL_NAME="PIS-0912-WOGG"
-I=1770000
+TASK=StackCube-v0
+MODEL_NAME=SC-0919-MIDDLE
+I=2354000
 
 cd ../src &&
 
 #CUDA_VISIBLE_DEVICES=6 python eval.py --eval_max_steps=300 \
-#    --from_ckpt=1780000 --task=TurnFaucet-v0 \
+#    --from_ckpt=1780000 --task=TurnFaucet-v0-v0 \
 #    --model_name=TF-0905 \
 
-CUDA_VISIBLE_DEVICES=7 python eval.py \
-  --eval_max_steps=230 \
+python eval.py \
+  --eval_max_steps=200 \
   --from_ckpt=$I \
   --task=$TASK \
-  --model_name=$MODEL_NAME
+  --model_name=$MODEL_NAME \
+  --n_env=25
+
 
 #for ((i=1000000; i<=1800000; i+=20000));do
 #  CUDA_VISIBLE_DEVICES=0 python eval.py --eval_max_steps=250 --from_ckpt=$i --task=StackCube-v0 --model_name=SC-0903
@@ -23,7 +25,7 @@ CUDA_VISIBLE_DEVICES=7 python eval.py \
 
 
 
-#           PegInsertionSide              StackCube                     TurnFaucet                        PickCube
+#           PegInsertionSide              StackCube                     TurnFaucet-v0                        PickCube
 # ITER      TRAIN SUCC  TEST SUCC         TRAIN SUCC  TEST SUCC         TRAIN SUCC  TEST SUCC             TRAIN SUCC  TEST SUCC
 # 0903      61.00%      31.00% (1.74e6)   61.00%      31.00% (1.74e6)
 #                                         60.00%      39.00% (1.54e6)

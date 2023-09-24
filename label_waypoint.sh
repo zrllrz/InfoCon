@@ -1,26 +1,13 @@
 #!/bin/bash
 
-FILE_DIR="model_checkpoints/"
-TASK=PickCube-v0
-MODEL_NAME=PC_0906_1003k4-r4-f2-c10_KT0.1_EMA0.9_ema_ave_st-emb1.2-r_l10.0-use_r-egpthn_s2_a1-emb128-key128-e128-cluster0.001-rec0.1-finetune
-I=3900
+TASK=PegInsertionSide-v0
 
 cd src &&
 
-while [[ $I -ge 2000 ]];
-do
-  if test -e "$FILE_DIR$MODEL_NAME""/epoch""$I.pth"; then
-    CUDA_VISIBLE_DEVICES=2 python label.py \
-      --task=$TASK --control_mode=pd_joint_delta_pos --obs_mode=state \
-      --seed=0 \
-      --n_traj=-1 \
-      --model_name=$MODEL_NAME \
-      --from_ckpt=$I
-  else
-    echo "wait"
-  fi
-  ((I-=100))
-done
+CUDA_VISIBLE_DEVICES=3 python label_waypoint.py \
+  --task=$TASK --control_mode=pd_joint_delta_pos --obs_mode=state \
+  --seed=0 \
+  --n_traj=-1 \
 
 #for ((i=2000; i<=4000; i+=100));do
 #  CUDA_VISIBLE_DEVICES=2 python label.py \

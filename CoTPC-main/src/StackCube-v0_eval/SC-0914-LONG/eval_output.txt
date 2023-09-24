@@ -967,3 +967,29 @@ StackCube-v0
 SC-0914-LONG
 388000
 success 29.20
+test/success 22.00
+StackCube-v0
+SC-0914-LONG
+390000
+success 20.00
+test/success 12.00
+StackCube-v0
+SC-0914-LONG
+392000
+success 5.80
+test/success 5.00
+StackCube-v0
+SC-0914-LONG
+394000
+success 36.20
+test/success 33.00
+StackCube-v0
+SC-0914-LONG
+396000
+success 38.60
+test/success 26.00
+StackCube-v0
+SC-0914-LONG
+398000
+success 37.40
+                                                    

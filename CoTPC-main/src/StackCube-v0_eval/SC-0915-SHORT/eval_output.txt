@@ -12,3 +12,4 @@ StackCube-v0
 SC-0915-SHORT
 1636000
 success 61.60
+test/success 27.00
