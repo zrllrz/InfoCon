@@ -1,8 +1,10 @@
 #!/bin/bash
 
-TASK=StackCube-v0
-MODEL_NAME=SC-0919-MIDDLE
-I=2354000
+TASK=PickCube-v0
+# MODEL_NAME=SC-0919-MIDDLE
+MODEL_NAME=PC-0921-WAYPOINT
+# I=2196000
+I=1800000
 
 cd ../src &&
 
@@ -11,12 +13,11 @@ cd ../src &&
 #    --model_name=TF-0905 \
 
 python eval.py \
-  --eval_max_steps=200 \
+  --eval_max_steps=150 \
   --from_ckpt=$I \
   --task=$TASK \
   --model_name=$MODEL_NAME \
   --n_env=25
-
 
 #for ((i=1000000; i<=1800000; i+=20000));do
 #  CUDA_VISIBLE_DEVICES=0 python eval.py --eval_max_steps=250 --from_ckpt=$i --task=StackCube-v0 --model_name=SC-0903

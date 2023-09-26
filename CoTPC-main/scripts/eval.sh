@@ -1,9 +1,9 @@
 #!/bin/bash
 
 MODEL_DIR="../save_model/"
-TASK="StackCube-v0"
-MODEL_NAME="SC-0919-MIDDLE"
-I=2700000
+TASK=StackCube-v0
+MODEL_NAME=SC-0919-MIDDLE
+I=2184000
 
 cd ../src &&
 
@@ -11,11 +11,11 @@ cd ../src &&
 #    --from_ckpt=1780000 --task=TurnFaucet-v0-v0 \
 #    --model_name=TF-0905 \
 
-while [[ $I -ge 1350000 ]];
+while [[ $I -ge 1000000 ]];
 do
   echo "$MODEL_DIR$MODEL_NAME""/""$I.pth"
   if test -e "$MODEL_DIR$MODEL_NAME""/""$I.pth"; then
-    python eval.py \
+    CUDA_VISIBLE_DEVICES=0 python eval.py \
       --eval_max_steps=200 \
       --from_ckpt=$I \
       --task=$TASK \
