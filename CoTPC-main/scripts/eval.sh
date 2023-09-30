@@ -2,8 +2,8 @@
 
 MODEL_DIR="../save_model/"
 TASK=StackCube-v0
-MODEL_NAME=SC-0919-MIDDLE
-I=2184000
+MODEL_NAME=SC-0921-MIDDLE
+I=1916000
 
 cd ../src &&
 

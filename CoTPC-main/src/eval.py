@@ -208,28 +208,30 @@ if __name__ == "__main__":
 
     # Seen scene configurations.
     metric_dict = defaultdict(lambda: [[] for _ in range(len(eval_ids))])
-    for start_idx in tqdm(range(0, len(eval_ids), n_env)):
-        reset_args_list = []
-        for i in range(start_idx, min(start_idx + n_env, len(eval_ids))):
-            reset_kwargs = json_data["episodes"][eval_ids[i]]['reset_kwargs']
-            reset_args_list.append(reset_kwargs)
 
-        s = torch.from_numpy(envs.reset(reset_args_list)).float()
-        state_hist, action_hist, t = [s], [], np.zeros([n_env])
+    if args.task != 'StackCube-v0':
+        for start_idx in tqdm(range(0, len(eval_ids), n_env)):
+            reset_args_list = []
+            for i in range(start_idx, min(start_idx + n_env, len(eval_ids))):
+                reset_kwargs = json_data["episodes"][eval_ids[i]]['reset_kwargs']
+                reset_args_list.append(reset_kwargs)
 
-        for step in range(args.eval_max_steps):
-            a = predict(model, action_hist, state_hist, t).cpu().numpy()
+            s = torch.from_numpy(envs.reset(reset_args_list)).float()
+            state_hist, action_hist, t = [s], [], np.zeros([n_env])
 
-            s, _, _, infos = envs.step(a)
-            # print(infos[24])
-            s = torch.from_numpy(s).float()
+            for step in range(args.eval_max_steps):
+                a = predict(model, action_hist, state_hist, t).cpu().numpy()
 
-            action_hist, state_hist, t = update(
-                model, action_hist, state_hist, a, s, t)
+                s, _, _, infos = envs.step(a)
+                # print(infos[24])
+                s = torch.from_numpy(s).float()
 
-            # Update metrics.
-            for i, info in enumerate(infos):
-                j = start_idx + i
+                action_hist, state_hist, t = update(
+                    model, action_hist, state_hist, a, s, t)
+
+                # Update metrics.
+                for i, info in enumerate(infos):
+                    j = start_idx + i
                 # You might want to use these additional metrics.
                 # if args.task == 'PickCube-v0':
                 #     metric_dict['is_grasped'][j].append(info['is_grasped'])
@@ -245,15 +247,15 @@ if __name__ == "__main__":
                 #     metric_dict['close_to_target'][j].append(info['chair_close_to_target'])
                 #     metric_dict['static_at_last'][j].append(
                 #         info['chair_close_to_target'] and info['chair_static'])
-                metric_dict['success'][j].append(info['success'])
+                    metric_dict['success'][j].append(info['success'])
 
-    for k, v in metric_dict.items():
-        v = np.mean([np.any(vv) for vv in v]) * 100
-        output_str += f'{k} {v:.2f}, '
-        output_dict[k] = v
-    output_str = output_str[:-2]
-    print(output_str)
-    flog.write(output_str + '\n')
+        for k, v in metric_dict.items():
+            v = np.mean([np.any(vv) for vv in v]) * 100
+            output_str += f'{k} {v:.2f}, '
+            output_dict[k] = v
+        output_str = output_str[:-2]
+        print(output_str)
+        flog.write(output_str + '\n')
 
     # Unseen scene configurations.
     # Unseen objects for peg insertion and seen objects otherwise.

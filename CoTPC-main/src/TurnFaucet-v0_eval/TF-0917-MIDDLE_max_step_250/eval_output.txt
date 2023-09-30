@@ -1522,3 +1522,127 @@ TurnFaucet-v0 TF-0917-MIDDLE 2156000
 success 53.80
 test/success 42.00
 test_h/success 18.25
+TurnFaucet-v0 TF-0917-MIDDLE 2154000
+success 51.60
+test/success 46.00
+test_h/success 18.25
+TurnFaucet-v0 TF-0917-MIDDLE 2152000
+success 52.00
+test/success 46.00
+test_h/success 14.25
+TurnFaucet-v0 TF-0917-MIDDLE 2150000
+success 52.80
+test/success 45.00
+test_h/success 18.50
+TurnFaucet-v0 TF-0917-MIDDLE 2148000
+success 51.60
+test/success 43.00
+test_h/success 17.00
+TurnFaucet-v0 TF-0917-MIDDLE 2146000
+success 52.40
+test/success 48.00
+test_h/success 18.00
+TurnFaucet-v0 TF-0917-MIDDLE 2144000
+success 50.80
+test/success 44.00
+test_h/success 17.75
+TurnFaucet-v0 TF-0917-MIDDLE 2142000
+success 53.80
+test/success 41.00
+test_h/success 16.25
+TurnFaucet-v0 TF-0917-MIDDLE 2140000
+success 53.20
+test/success 46.00
+test_h/success 15.00
+TurnFaucet-v0 TF-0917-MIDDLE 2138000
+success 51.60
+test/success 43.00
+test_h/success 17.50
+TurnFaucet-v0 TF-0917-MIDDLE 2136000
+success 55.40
+test/success 44.00
+test_h/success 16.00
+TurnFaucet-v0 TF-0917-MIDDLE 2134000
+success 48.60
+test/success 38.00
+test_h/success 14.50
+TurnFaucet-v0 TF-0917-MIDDLE 2132000
+success 52.60
+test/success 44.00
+test_h/success 18.25
+TurnFaucet-v0 TF-0917-MIDDLE 2130000
+success 50.40
+test/success 44.00
+test_h/success 16.25
+TurnFaucet-v0 TF-0917-MIDDLE 2128000
+success 52.60
+test/success 47.00
+test_h/success 18.00
+TurnFaucet-v0 TF-0917-MIDDLE 2126000
+success 52.40
+test/success 42.00
+test_h/success 14.75
+TurnFaucet-v0 TF-0917-MIDDLE 2124000
+success 55.00
+test/success 42.00
+test_h/success 15.75
+TurnFaucet-v0 TF-0917-MIDDLE 2122000
+success 53.40
+test/success 42.00
+test_h/success 17.75
+TurnFaucet-v0 TF-0917-MIDDLE 2120000
+success 52.60
+test/success 40.00
+test_h/success 19.00
+TurnFaucet-v0 TF-0917-MIDDLE 2118000
+success 53.60
+test/success 48.00
+test_h/success 14.25
+TurnFaucet-v0 TF-0917-MIDDLE 2116000
+success 52.00
+test/success 43.00
+test_h/success 19.50
+TurnFaucet-v0 TF-0917-MIDDLE 2114000
+success 51.00
+test/success 38.00
+test_h/success 16.00
+TurnFaucet-v0 TF-0917-MIDDLE 2112000
+success 52.20
+test/success 45.00
+test_h/success 16.25
+TurnFaucet-v0 TF-0917-MIDDLE 2110000
+success 52.80
+test/success 43.00
+test_h/success 16.50
+TurnFaucet-v0 TF-0917-MIDDLE 2108000
+success 53.40
+test/success 43.00
+test_h/success 18.25
+TurnFaucet-v0 TF-0917-MIDDLE 2106000
+success 52.40
+test/success 45.00
+test_h/success 12.25
+TurnFaucet-v0 TF-0917-MIDDLE 2104000
+success 53.00
+test/success 43.00
+test_h/success 15.25
+TurnFaucet-v0 TF-0917-MIDDLE 2102000
+success 54.00
+test/success 46.00
+test_h/success 18.25
+TurnFaucet-v0 TF-0917-MIDDLE 2100000
+success 52.00
+test/success 44.00
+test_h/success 17.00
+TurnFaucet-v0 TF-0917-MIDDLE 2098000
+success 52.20
+test/success 49.00
+test_h/success 16.50
+TurnFaucet-v0 TF-0917-MIDDLE 2096000
+success 53.40
+test/success 47.00
+test_h/success 16.25
+TurnFaucet-v0 TF-0917-MIDDLE 2094000
+success 50.40
+test/success 46.00
+test_h/success 14.75

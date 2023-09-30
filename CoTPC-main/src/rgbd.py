@@ -27,6 +27,8 @@ def parse_args():
 
 
 if __name__ == "__main__":
+    SIDE_WIDTH = 280
+
     font_path = '/usr/share/fonts/truetype/ubuntu/Ubuntu-C.ttf'
 
     args = parse_args()
@@ -58,18 +60,15 @@ if __name__ == "__main__":
     #     use_camera = 'base_camera'
     use_hand_camera = args.use_hand_camera
 
-    frames = torch.from_numpy(np.array(traj_all[f"traj_{args.idx}"]["obs"]['image']['base_camera']['rgb']))
+    if use_hand_camera:
+        frames = torch.from_numpy(np.array(traj_all[f"traj_{args.idx}"]["obs"]['image']['hand_camera']['rgb']))
+    else:
+        frames = torch.from_numpy(np.array(traj_all[f"traj_{args.idx}"]["obs"]['image']['base_camera']['rgb']))
+
     frames[:, :1, :, ] = torch.tensor([[[0, 0, 0]]])
     frames[:, -1:, :, ] = torch.tensor([[[0, 0, 0]]])
     frames[:, :, :1, ] = torch.tensor([[[0, 0, 0]]])
     frames[:, :, -1:, ] = torch.tensor([[[0, 0, 0]]])
-    if use_hand_camera:
-        frames_hand = torch.from_numpy(np.array(traj_all[f"traj_{args.idx}"]["obs"]['image']['hand_camera']['rgb']))
-        frames_hand[:, :1, :, ] = torch.tensor([[[0, 0, 0]]])
-        frames_hand[:, -1:, :, ] = torch.tensor([[[0, 0, 0]]])
-        frames_hand[:, :, :1, ] = torch.tensor([[[0, 0, 0]]])
-        frames_hand[:, :, -1:, ] = torch.tensor([[[0, 0, 0]]])
-        frames = torch.cat([frames, frames_hand], dim=1)
     print(frames.shape)
 
     key_frames = list()
@@ -177,17 +176,17 @@ if __name__ == "__main__":
     if not os.path.exists("vis_key_states/" + args.task + f"/{args.idx}/pred"):
         os.makedirs("vis_key_states/" + args.task + f"/{args.idx}/pred")
 
-    # keys-0909.txt
     with open(traj_save_keys_path + '/keys-long3.txt', 'r') as fk:
         key_line = fk.readlines()[args.idx].split(sep=',')
         key_line = [int(item) for item in key_line[:-1]]
         for f_idx, img in enumerate(frames):
-            print('single img shape', img.shape)
             img_torch = img.permute(2, 0, 1).unsqueeze(0)
+            if args.task == 'PickCube-v0' or 'StackCube-v0':
+                img_torch = img_torch[:, :, 32:-32, 32:-32]
             img_torch = torch.div(img_torch, 255.0)
             img_torch = torch.nn.functional.interpolate(
                 input=img_torch,
-                size=(512 + 512 * int(use_hand_camera), 512),
+                size=(512, 512),
                 mode='bilinear'
             )
             img_torch = torch.mul(img_torch, 255.0)
@@ -195,7 +194,6 @@ if __name__ == "__main__":
             img_torch = img_torch.to(dtype=torch.uint8)
             img = img_torch
             if f_idx in key_line:
-                print(f'append key state at frame {f_idx}')
                 key_frames.append(img)
                 # save single
                 img_npy = img.cpu().numpy()
@@ -203,7 +201,6 @@ if __name__ == "__main__":
                 img_IMAGE = Image.fromarray(img_int8)
                 img_IMAGE.save("vis_key_states/" + args.task + f"/{args.idx}/pred/{f_idx}_" + ".jpg")
             if f_idx in key_states_gt:
-                print(f'append ground truth key state at frame {f_idx}')
                 img_gt = img.clone()
                 key_frames_gt.append(img_gt)
                 # save single
@@ -242,28 +239,40 @@ if __name__ == "__main__":
             key_gt_long.append(key_frames_gt[j])
             j += 1
         else:
-            key_gt_long.append(torch.full(size=(512 + 512 * int(use_hand_camera), 512, 3), fill_value=255, device='cpu'))
+            key_gt_long.append(torch.full(size=(512, 512, 3), fill_value=255, device='cpu'))
         key_gt_long[i][:4, :, ] = torch.tensor([[[0, 0, 0]]])
         key_gt_long[i][-4:, :, ] = torch.tensor([[[0, 0, 0]]])
         key_gt_long[i][:, :4, ] = torch.tensor([[[0, 0, 0]]])
         key_gt_long[i][:, -4:, ] = torch.tensor([[[0, 0, 0]]])
     key_frames_gt_long = torch.cat(key_gt_long, dim=1)
-    key_framse_gt_long_txt = torch.full_like(key_frames_gt_long[:256, ...], fill_value=255)
+    key_framse_gt_long_txt = torch.full_like(key_frames_gt_long[:128, ...], fill_value=255)
     key_frames_gt_long = torch.cat([key_framse_gt_long_txt, key_frames_gt_long], dim=0)
+
+    # side label
+    key_frames_gt_long_side_txt = torch.full(size=(640, SIDE_WIDTH, 3), fill_value=255, device=key_frames_gt_long.device)
+    key_frames_gt_long_side_txt[636:, :, ] = torch.tensor([[[0, 0, 0]]], device=key_frames_gt_long.device)
+    key_frames_gt_long = torch.cat([key_frames_gt_long_side_txt, key_frames_gt_long], dim=1)
+
+
     print(key_frames_gt_long.shape)
 
     # concat into long image
     # circle nearest key states
     for i in range(len(key_line)):
         if i in key_sim_idx:
-            key_frames[i][:4, :, ] = torch.tensor([[[255, 0, 0]]])
-            key_frames[i][-4:, :, ] = torch.tensor([[[255, 0, 0]]])
-            key_frames[i][:, :4, ] = torch.tensor([[[255, 0, 0]]])
-            key_frames[i][:, -4:, ] = torch.tensor([[[255, 0, 0]]])
+            key_frames[i][:12, :, ] = torch.tensor([[[255, 0, 0]]])
+            key_frames[i][-12:, :, ] = torch.tensor([[[255, 0, 0]]])
+            key_frames[i][:, :12, ] = torch.tensor([[[255, 0, 0]]])
+            key_frames[i][:, -12:, ] = torch.tensor([[[255, 0, 0]]])
     key_frames_long = torch.cat(key_frames, dim=1)
-    key_framse_long_txt = torch.full_like(key_frames_long[:256, ...], fill_value=255)
+    key_framse_long_txt = torch.full_like(key_frames_long[:128, ...], fill_value=255)
     key_frames_long = torch.cat([key_frames_long, key_framse_long_txt], dim=0)
     print(key_frames_long.shape)
+
+    # side label
+    key_frames_long_side_txt = torch.full(size=(640, SIDE_WIDTH, 3), fill_value=255, device=key_frames_long.device)
+    key_frames_long_side_txt[:4, :, ] = torch.tensor([[[0, 0, 0]]], device=key_frames_long.device)
+    key_frames_long = torch.cat([key_frames_long_side_txt, key_frames_long], dim=1)
 
     key_frames_long = torch.cat([key_frames_gt_long, key_frames_long], dim=0)
 
@@ -273,13 +282,16 @@ if __name__ == "__main__":
     # write frame idx at down part
     draw = ImageDraw.Draw(key_frames_long_img)
     j = 0
+
+    draw.text((SIDE_WIDTH - 90, 512 + 30), 'GT', fill='black', font=ImageFont.truetype(font_path, size=96), align='left')
+    draw.text((SIDE_WIDTH - 280, 512 + 120), 'InfoCon', fill='black', font=ImageFont.truetype(font_path, size=96), align='left')
     for i, f_idx in enumerate(key_line):
         text = 'frame ' + str(f_idx)
-        draw.text((i * 512, 256 + 512 + 512 + 1024 * int(use_hand_camera)), text, fill='black', font=ImageFont.truetype(font_path, size=96), align='left')
+        draw.text((SIDE_WIDTH + i * 512, 128 + 512 + 512), text, fill='black', font=ImageFont.truetype(font_path, size=96), align='left')
         if i in key_sim_idx:
             text_gt = 'frame ' + str(key_states_gt[j])
             j += 1
-            draw.text((i * 512, 128), text_gt, fill='black', font=ImageFont.truetype(font_path, size=96), align='left')
+            draw.text((SIDE_WIDTH + i * 512, 32), text_gt, fill='black', font=ImageFont.truetype(font_path, size=96), align='left')
 
     key_frames_long_img.save("vis_key_states/" + args.task + f"/long/{args.idx}_" + ".jpg")
 
