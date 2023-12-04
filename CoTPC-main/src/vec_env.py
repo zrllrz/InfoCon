@@ -9,6 +9,8 @@ from transforms3d.quaternions import qmult
 
 import sapien.core as sapien
 
+from mani_skill2.utils.wrappers import RecordEpisode
+
 
 def disturb(env, kwargs):
     if 'peg' in kwargs:
@@ -25,10 +27,15 @@ def disturb(env, kwargs):
             p=pose.p + [dx, dy, 0], q=qmult(quat, pose.q)))
 
 
-def get_mp_envs(env_id, n_env, start_idx=0, **env_kwargs):
+def get_mp_envs(env_id, n_env, start_idx=0, record_dir=None, **env_kwargs):
     def env_fn(rank):
         def fn():
             env = gym.make(env_id, **env_kwargs)
+            if record_dir is not None:
+                env = RecordEpisode(
+                    env,
+                    output_dir=record_dir
+                )
             return env
 
         return fn

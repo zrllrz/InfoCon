@@ -9,8 +9,8 @@ from collections import deque
 from tqdm import tqdm
 import numpy as np
 
-from data_autocot import MS2Demos, get_padding_fn
-from model import GPTConfig, GPTWithCoT, code_book_len_to_key_state_mark
+from data_autocot_cat import MS2Demos, get_padding_fn
+from model_cat import GPTConfig, GPTCat
 from train_utils import CosineAnnealingLRWarmup
 
 try:
@@ -46,18 +46,8 @@ def parse_args():
     # Hyper-parameters regarding CoTPC.
     parser.add_argument("--key_state_coeff", default=0.0, type=float,
                         help="Coefficient for the key state prediction loss.")
-    parser.add_argument('--model_type', type=str, default='s+a+cot',
+    parser.add_argument('--model_type', type=str, default='s+a+k',
                         help="Model type for the CoTPC model (see GPTConfig).")
-    parser.add_argument('--vq_n_e', type=int, default=10,
-                        help="Length of code book (number of entries) back in AutoCoT."
-                             "Transform it into key_states and key_state_loss,"
-                             "which will cover the effect of other two args")
-    parser.add_argument('--key_states', type=str, default='a',
-                        help="Which key states to use (see GPTConfig for the spec. format).")
-    parser.add_argument("--key_state_loss", default='', type=str,
-                        help="Features out of what attention layers to use for key state prediction " +
-                             "losses (see GPTConfig for the spec. format).")
-    parser.add_argument('--cot_decoder', type=str, default='256', help="Specs of the CoT decoder.")
 
     # General hyper-parameters regarding model loading and saving
     parser.add_argument("--model_name", default='', type=str, help="Model name (for storing ckpts).")
@@ -128,41 +118,26 @@ def get_loss(preds, targets, lengths):
 if __name__ == "__main__":
 
     args = parse_args()
-    print(args.keys_name)
-    input()
     assert args.model_name != '', 'Should specify --model_name'
     print('Model name:', args.model_name)
 
-    if 'cot' in args.model_type:
-        assert (args.vq_n_e != 0) or args.key_states, 'Should specify --key_states.'
-        if args.vq_n_e != 0:
-            key_states_dict = \
-                code_book_len_to_key_state_mark(length=args.vq_n_e,
-                                                key_state_loss_str=args.key_state_loss)
-            args_key_states, args_key_state_loss = key_states_dict['key_states'], key_states_dict['key_state_loss']
-
-        else:
-            args_key_states, args_key_state_loss = args.key_states, args.key_state_loss
-    else:
-        args_key_states, args_key_state_loss = 'a', '0'
-    print(args_key_states, args_key_state_loss)
-
-
     train_dataset = MS2Demos(
-        control_mode=args.control_mode,
+        task=args.task,
         obs_mode=args.obs_mode,
-        length=args.num_traj, seed=args.seed,
+        control_mode=args.control_mode,
+        length=args.num_traj,
         min_seq_length=args.min_seq_length,
         max_seq_length=args.context_length,
-        with_key_states='cot' in args.model_type,
-        task=args.task, multiplier=args.multiplier,
+        with_key_states='k' in args.model_type,
+        multiplier=args.multiplier,
+        seed=args.seed,
         keys_name=args.keys_name
     )
     print('Training data size:', len(train_dataset))
     print('Max steps:', train_dataset.max_steps)
 
     input_dict = ['s', 'a', 't']
-    input_dict += ['k', 'km'] if 'cot' in args.model_type else []
+    input_dict += ['k'] if 'k' in args.model_type else []
     collate_fn = get_padding_fn(input_dict)
     train_data = DataLoader(
         dataset=train_dataset,
@@ -177,23 +152,20 @@ if __name__ == "__main__":
     data_iter = iter(train_data)
 
     state_dim, action_dim = train_dataset.info()
+
     conf = GPTConfig(
         args.context_length,
         n_layer=args.n_layer,
         n_head=args.n_head,
         n_embd=args.n_embd,
         model_type=args.model_type,
-        key_states=args_key_states,
-        key_state_loss=args_key_state_loss,
         max_timestep=train_dataset.max_steps,
         embd_pdrop=float(args.dropout),
         resid_pdrop=float(args.dropout),
         attn_pdrop=float(args.dropout),
-        cot_decoder=args.cot_decoder,
     )
     print('state_dim', state_dim)
-    input()
-    model = GPTWithCoT(conf, state_dim=state_dim, action_dim=action_dim).cuda()
+    model = GPTCat(conf, state_dim=state_dim, action_dim=action_dim).cuda()
     optimizer = model.configure_adamw_optimizers({
         'init_lr': float(args.init_lr),
         'weight_decay': float(args.weight_decay),
@@ -233,8 +205,6 @@ if __name__ == "__main__":
     losses_act_pred = deque(maxlen=1000)
     losses_key_states = deque(maxlen=1000)
 
-    # Convert key states to integers.
-    key_states = [ord(c) - ord('a') for c in args_key_states]
     # Main training loop.
     for idx in tqdm(range(args.n_iters + 1)):
 
@@ -252,27 +222,15 @@ if __name__ == "__main__":
         batch = {k: v.cuda() for k, v in batch.items()}
 
         # Forward pass.
-        act_pred, key_states_pred = model(batch['s'], batch['t'], batch['a'])
+        a_preds, k_preds = model(batch['s'], batch['t'], batch['a'], batch['k'])
 
         # Obtain training losses.
-        loss_act_pred = get_loss(act_pred, batch['a'], batch['lengths'])
-        total_loss = loss_act_pred
+        loss_a_preds = get_loss(a_preds, batch['a'], batch['lengths'])
+        loss_k_preds = get_loss(k_preds, batch['k'], batch['lengths'])
+        total_loss = loss_a_preds + args.key_state_coeff * loss_k_preds
 
-        loss_key_states = torch.tensor(-1)  # -1 means N/A.
-        if 'cot' in args.model_type:
-            ks_gt = torch.stack(
-                [batch['k'][:, k_idx] for k_idx in key_states], 1)
-            # For CoTPC with AutoCoT labeled, we need to mask the
-            ks_mask = torch.stack([batch['km'][:, k_idx] for k_idx in key_states], 1).unsqueeze(-1)
-            # (B, len(key_states), 1)
-
-            loss_key_states = torch.mean(torch.stack(
-                [F.mse_loss(ks_pred * ks_mask, ks_gt * ks_mask) for ks_pred in key_states_pred]))
-            if args.key_state_coeff > 0:
-                total_loss += args.key_state_coeff * loss_key_states
-
-        losses_act_pred.append(loss_act_pred.item())
-        losses_key_states.append(loss_key_states.item())
+        losses_act_pred.append(loss_a_preds.item())
+        losses_key_states.append(loss_k_preds.item())
         optimizer.zero_grad()
         total_loss.backward()
         optimizer.step()

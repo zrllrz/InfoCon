@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="PublishConfigData" autoUpload="Always" serverName="rzliu@147.8.182.173:2522" remoteFilesAllowedToDisappearOnAutoupload="false">
+    <serverData>
+      <paths name="rzliu@147.8.182.173:2522">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/rzliu/AutoCoT" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="rzliu@147.8.182.173:2522 (2)">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/rzliu/AutoCoT" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="rzliu@147.8.182.173:2522 password">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/rzliu/AutoCoT" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="rzliu@147.8.182.173:2522 password (1)">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/rzliu/AutoCoT" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+    </serverData>
+    <option name="myAutoUpload" value="ALWAYS" />
+  </component>
+</project>

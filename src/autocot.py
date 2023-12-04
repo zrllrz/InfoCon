@@ -447,9 +447,6 @@ class AutoCoT(pl.LightningModule):
         # zero_ts_mask = torch.eq(unified_t[:, 0], 0)
         unified_t = unified_t[:states.shape[0], :states.shape[1]]
 
-        ##############################################################################
-        # first forward, use policy and implicit energy to adjust key_soft, key_book #
-        ##############################################################################
         key_soft, state_trans = self.key_net(states, timesteps, actions)
         encoding_indices, key_hard, vparams_w, vparams_hard, w_max, w_cnt, key_soft_t_emb = \
             self.key_book(key_soft, unified_t)
@@ -475,7 +472,6 @@ class AutoCoT(pl.LightningModule):
         # loss: clustering behind
         mask_cluster_rate = self.mask_cluster_rate()
         enough_mask = torch.less(w_max, 0.5 + 0.5 * self.half_linear_increase_stop).to(dtype=torch.float32)
-        # print('w_cnt.shape', w_cnt.shape)
         ls_label_cluster = torch.neg(torch.log(w_max))
         l_label_cluster = ls_label_cluster.mean()
 
@@ -543,51 +539,6 @@ class AutoCoT(pl.LightningModule):
         # statistic on encoding indices
         if self.step % 10 == 0:
             self.statistic_indices(encoding_indices, unified_t)
-
-        ###################################################
-        # second forward, for classification (clustering) #
-        ###################################################
-        if (self.sa_type != 'egpt' and self.sa_type != 'egpthn') and self.flag_cluster:
-            print('！@#¥%……&*（')
-            assert False
-            # key_soft, _ = self.key_net(states, timesteps, actions)
-            #
-            # encoding_indices, v_global, _, _, score_vpss_2, score_vpsh_2, score_kss_2, score_ksh_2 \
-            #     = self.key_book(key_soft)
-            #
-            # pn_change_ss = torch.where(torch.less(score_vpss_1, score_vpss_2), 0.0, 1.0)
-            # pn_change_sh = torch.where(torch.less(score_vpsh_1, score_vpsh_2), 0.0, 1.0)
-            #
-            # logit_vpss = torch.neg(torch.log(F.sigmoid(score_vpss_2)))  # (B, T, T)
-            # logit_vpsh = torch.neg(torch.log(F.sigmoid(score_vpsh_2)))  # (B, T, n_e)
-            # logit_kss = torch.neg(torch.log(F.sigmoid(score_kss_2)))  # (B, T, T)
-            # logit_ksh = torch.neg(torch.log(F.sigmoid(score_ksh_2)))  # (B, T, n_e)
-            #
-            # logit_contrast_ss = torch.abs(logit_vpss - logit_kss) - self.LIP  # (B, T, T)
-            # logit_contrast_sh = torch.abs(logit_vpsh - logit_ksh) - self.LIP  # (B, T, n_e)
-            #
-            # logit_contrast_ss = logit_contrast_ss * pn_change_ss * self.w_ss
-            # logit_contrast_sh = logit_contrast_sh * pn_change_sh
-            #
-            # logit_contrast_ss = torch.maximum(logit_contrast_ss, torch.zeros_like(logit_contrast_ss))
-            # logit_contrast_sh = torch.maximum(logit_contrast_sh, torch.zeros_like(logit_contrast_sh))
-            #
-            # log_logit_contrast_ss = logit_contrast_ss.mean()
-            # log_logit_contrast_sh = logit_contrast_sh.mean()
-            #
-            # l_cluster = torch.cat([logit_contrast_ss, logit_contrast_sh, logit_contrast_sh], dim=-1)
-            # l_cluster = torch.mean(l_cluster, dim=2)
-            # l_cluster = torch.mean(l_cluster, dim=1)
-            # l_cluster = torch.mean(l_cluster, dim=0)
-            #
-            # opt_cluster.zero_grad()
-            # self.manual_backward(l_cluster)
-            # opt_cluster.step()
-            # sch_cluster.step()  # dont forget schedulers !!!!
-        # else:
-        #     l_cluster = 0.0
-        #     log_logit_contrast_ss = 0.0
-        #     log_logit_contrast_sh = 0.0
 
         # log the loss-es
 
@@ -658,10 +609,6 @@ class AutoCoT(pl.LightningModule):
         no_decay.add('key_net.global_pos_emb')
         no_decay_wo_sa.add('key_net.local_pos_emb')
         no_decay_wo_sa.add('key_net.global_pos_emb')
-        # no_decay.add('rec_net.local_pos_emb')
-        # no_decay.add('rec_net.global_pos_emb')
-        # no_decay_wo_sa.add('rec_net.local_pos_emb')
-        # no_decay_wo_sa.add('rec_net.global_pos_emb')
         no_decay.add('sa_net.local_pos_emb')
         no_decay.add('sa_net.global_pos_emb')
         if self.future_net is not None:
@@ -669,11 +616,6 @@ class AutoCoT(pl.LightningModule):
             no_decay.add('future_net.global_pos_emb')
             no_decay_wo_sa.add('future_net.local_pos_emb')
             no_decay_wo_sa.add('future_net.global_pos_emb')
-
-        # for pn in sorted(list(decay_wo_sa)):
-        #     print(pn)
-        # for pn in sorted(list(no_decay_wo_sa)):
-        #     print(pn)
 
         # validate that we considered every parameter
 

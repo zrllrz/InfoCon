@@ -65,6 +65,7 @@ def parse_args():
     parser.add_argument("--from_ckpt", default=-1, type=int, help="Ckpt of the module to be loaded.")
 
     parser.add_argument("--pause", action='store_true', help="debug")
+    parser.add_argument("--key_name", default="keys.txt", type=str, help="file name of labeled out key states.")
 
     # parser.add_argument("--eval_max_steps", default=200, type=int, help="Max steps allowed in eval.")
 

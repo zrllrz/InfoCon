@@ -2,11 +2,9 @@
 
 TASK=PegInsertionSide-v0
 # MODEL_NAME=SC-0919-MIDDLE
-MODEL_NAME=PIS-1114-MORE-K0909
+MODEL_NAME=PIS-1115-ACT-K0826
 # I=2196000
-I=3240000
-
-
+I=2250000
 
 cd ../src &&
 
@@ -14,7 +12,7 @@ cd ../src &&
 #    --from_ckpt=1780000 --task=TurnFaucet-v0-v0 \
 #    --model_name=TF-0905 \
 
-CUDA_VISIBLE_DEVICES=0 python eval.py \
+CUDA_VISIBLE_DEVICES=0 python eval_cat.py \
   --eval_max_steps=200 \
   --from_ckpt=$I \
   --task=$TASK \
@@ -24,7 +22,6 @@ CUDA_VISIBLE_DEVICES=0 python eval.py \
 #for ((i=1000000; i<=1800000; i+=20000));do
 #  CUDA_VISIBLE_DEVICES=0 python eval.py --eval_max_steps=250 --from_ckpt=$i --task=StackCube-v0 --model_name=SC-0903
 #done
-
 
 
 

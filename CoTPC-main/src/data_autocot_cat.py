@@ -37,7 +37,7 @@ class MS2Demos(Dataset):
         self.max_steps = -1  # Maximum timesteps across all trajectories.
         traj_path = os.path.join(DATA_PATH,
                                  f'{task}/trajectory.{obs_mode}.{control_mode}.h5')
-        key_path = os.path.join(DATA_PATH, f'{task}/' + keys_name)
+        key_path = os.path.join(DATA_PATH, f'{task}/'+ keys_name)
         print('Traj path:', traj_path)
         print('Key path:', key_path)
         self.data = self.load_demo_dataset(traj_path, key_path, length)
@@ -75,17 +75,19 @@ class MS2Demos(Dataset):
         # Here `s` is the state observation, `a` is the action,
         # `env_states` not used during training (can be used to reconstruct env for debugging).
         # `t` is used for positional embedding as in Decision Transformer.
+
         data_dict = {
             's': self.data['obs'][index][s_idx:e_idx].astype(np.float32),
             'a': self.data['actions'][index][s_idx:e_idx].astype(np.float32),
             't': np.array([s_idx]).astype(np.float32),
             # 'env_states': self.data['env_states'][index][s_idx:e_idx].astype(np.float32),
         }
+
         if self.with_key_states:
             if f'key_states_{index}' not in self.idx_to_key_states:
                 self.idx_to_key_states[f'key_states_{index}'] = self.get_key_states(index)
-            data_dict['k'] = self.idx_to_key_states[f'key_states_{index}'][0]
-            data_dict['km'] = self.idx_to_key_states[f'key_states_{index}'][1]
+            data_dict['k'] = self.idx_to_key_states[f'key_states_{index}'][s_idx:e_idx].astype(np.float32)
+
         return data_dict
 
     def info(self):  # Get observation and action shapes.
@@ -154,9 +156,21 @@ class MS2Demos(Dataset):
         with open(key_path, 'r') as fk:
             lines = fk.readlines()  # Read all lines
             for i in ids:
+                traj_len = len(traj_all[f"traj_{i}"]["obs"])
+                # print(f'traj_{i}, len:', traj_len)
+                key_label = [i for i in range(traj_len)]
                 line = lines[i].split(',')[:-1]
-                line = np.array([int(item) for item in line])
-                dataset['key_state_step'].append(line)
+                line = [int(item) for item in line]
+                line.sort(reverse=True)
+                ki = 0
+                for i in range(line[ki], -1, -1):
+                    if key_label[i] <= line[ki + 1]:
+                        ki += 1
+                    key_label[i] = line[ki]
+
+                key_label = np.array(key_label)
+
+                dataset['key_state_step'].append(key_label)
 
         self.max_steps = np.max([len(s) for s in dataset['env_states']])
 
@@ -166,18 +180,15 @@ class MS2Demos(Dataset):
         # Note that `infos` is for the next obs rather than the current obs.
         # Thus, we need to offset the `step_idx`` by one.
 
-        key_state_step = self.data['key_state_step'][idx]
-        # print('key_state_step =', key_state_step)
+        # now it is a seq with same len as traj
+        key_label = self.data['key_state_step'][idx]
 
-        key_states = [self.data['obs'][idx][step] for step in key_state_step]
-        # print('key_states', key_states)
-
-        key_state_mask = np.array([1.0 * (step != -1) for step in key_state_step])
-        # print('key_state_mask', key_states)
-
+        # get states from idx
+        key_states = [self.data['obs'][idx][step] for step in key_label]
         key_states = np.stack(key_states, 0).astype(np.float32)
+
         assert len(key_states) > 0, self.task
-        return key_states, key_state_mask
+        return key_states
 
 
 # To obtain the padding function for sequences.
@@ -210,20 +221,23 @@ if __name__ == "__main__":
 
     # The default values for CoTPC for tasks in ManiSkill2.
     batch_size, num_traj, seed, min_seq_length, max_seq_length, task = \
-        256, 500, 0, 60, 60, 'PickCube-v0'
-    batch_size, num_traj, seed, min_seq_length, max_seq_length, task = \
-        256, 500, 0, 60, 60, 'PushChair-v1'
+        256, 500, 0, 60, 60, 'PegInsertionSide-v0'
+    # batch_size, num_traj, seed, min_seq_length, max_seq_length, task = \
+    #     256, 500, 0, 60, 60, 'PushChair-v1'
 
     train_dataset = MS2Demos(
         # control_mode='pd_joint_delta_pos',
-        control_mode='base_pd_joint_vel_arm_pd_joint_vel',
-        length=num_traj, seed=seed,
+        task=task,
+        control_mode='pd_joint_delta_pos',
+        length=num_traj,
         min_seq_length=min_seq_length,
         max_seq_length=max_seq_length,
         with_key_states=True,
-        task=task)
+        seed=seed,
+        keys_name="keys8-26.txt"
+    )
 
-    collate_fn = get_padding_fn(['s', 'a', 't', 'k', 'km'])
+    collate_fn = get_padding_fn(['s', 'a', 't', 'k'])
     train_data = DataLoader(
         dataset=train_dataset,
         batch_size=batch_size,
@@ -231,9 +245,9 @@ if __name__ == "__main__":
 
     data_iter = iter(train_data)
     data = next(data_iter)
-    # print(len(data))  # 4
-    # for k, v in data.items():
-    #     print(k, v.shape)
+    print(len(data))  # 4
+    for k, v in data.items():
+        print(k, v.shape)
     # 's', [256, 60, 51]
     # 'a', [256, 60, 8]
     # 't', [256, 1]

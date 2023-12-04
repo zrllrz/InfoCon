@@ -1,0 +1,14 @@
+code_understanding
+maniskill2_test
+mytemp
+CoTPC-main/data
+CoTPC-main/src/vis_key_states
+CoTPC-main/src/PegInsertionSide-v0_eval
+CoTPC-main/src/PickCube-v0_eval
+CoTPC-main/src/StackCube-v0_eval
+CoTPC-main/save_model/SC-0917-SHORT
+rebuttal_materials
+
+__pycache__
+lightning_logs
+log.txt
