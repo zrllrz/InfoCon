@@ -1,29 +1,9 @@
 import os
 import numpy as np
 import argparse
-from tqdm import tqdm
-from collections import defaultdict
 import h5py
 
-from mani_skill2.utils.io_utils import load_json
-import mani_skill2.envs
-import torch
-
-from autocot import (
-    RecNetConfig,
-    KeyNetConfig,
-    FutureNetConfig,
-    ImplicitSAGPTConfig,
-    ExplicitSAGPTConfig,
-    ExplicitSAHNGPTConfig,
-    ImplicitSAResFCConfig,
-    ExplicitSAHNConfig,
-    AutoCoT
-)
-
-from vec_env import get_mp_envs  # Used for parallel evaluation.
-
-from path import MODEL_PATH, DATA_PATH
+from path import DATA_PATH
 
 
 def parse_args():
@@ -52,45 +32,15 @@ if __name__ == "__main__":
     dataset = {}
     traj_all = h5py.File(traj_path)
     length = len(traj_all)
-    # np.random.seed(args.seed)
-    # # If you use the same seed, you can get same trajectory choice
-    # # Since TurnFaucet-v0 uses 10 different faucet models, we shuffle the data
-    # # such that the resulting sampled data are evenly sampled across faucet models.
-    # if args.task == 'TurnFaucet-v0':
-    #     ids = []
-    #     for i in range(10):  # Hard-code the 10 data splits for permutation.
-    #         t_ids = np.random.permutation(len(traj_all) // 10)[:length // 10]
-    #         t_ids += i * len(traj_all) // 10
-    #         ids.append(t_ids)
-    #     ids = np.concatenate(ids)
-    # # Since PushChair uses 5 different faucet models, we shuffle the data
-    # # such that the resulting sampled data are evenly sampled across chair models.
-    # elif args.task == 'PushChair-v1':
-    #     ids = []
-    #     for i in range(5):  # Hard-code the 5 data splits for permutation.
-    #         t_ids = np.random.permutation(len(traj_all) // 5)[:length // 5]
-    #         t_ids += i * len(traj_all) // 5
-    #         ids.append(t_ids)
-    #     ids = np.concatenate(ids)
-    # else:
-    #     ids = np.random.permutation(len(traj_all))[:length]
     ids = np.arange(length)
 
     dataset['env_states'] = [np.array(traj_all[f"traj_{i}"]['env_states']) for i in ids]
     dataset['obs'] = [np.array(traj_all[f"traj_{i}"]["obs"]) for i in ids]
     dataset['actions'] = [np.array(traj_all[f"traj_{i}"]["actions"]) for i in ids]
 
-    print(dataset['env_states'][0].shape[0])
-
-    # dataset['key_label'] = [[None for j in range(dataset['env_states'][idx].shape[0])] for idx in range(length)]
-    # dataset['key_states_gt'] = list()
     key_states_gts = list()
 
     max_steps = np.max(len(s) for s in dataset['env_states'])
-
-    # print(dataset['env_states'][0].shape, type(dataset['env_states'][0]))
-    # print(dataset['obs'][0].shape, type(dataset['obs'][0]))
-    # print(dataset['actions'][0].shape, type(dataset['actions'][0]))
 
     for k in traj_all['traj_0']['infos'].keys():
         dataset[f'infos/{k}'] = [np.array(traj_all[f"traj_{i}"]["infos"][k]) for i in ids]
@@ -196,13 +146,11 @@ if __name__ == "__main__":
             key_states_gt = key_states_gts[i_traj]
             # read from line
             line = fk.readline()
-            print(line)
             line = line.split(sep=',')[:-1]
             line_int = list()
             for i in range(len(line)):
                 if int(line[i]) != -1:
                     line_int.append(int(line[i]))
-            print(line_int)
             for ks in key_states_gt:
                 line_int_sub = [(item - ks[1]) for item in line_int]
                 min_next = max(line_int_sub)

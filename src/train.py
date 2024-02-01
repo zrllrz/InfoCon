@@ -1,29 +1,17 @@
 import os
 import argparse
-import numpy as np
-
 import torch
 from torch.utils.data import DataLoader
-import torch.nn.functional as F
-
 import pytorch_lightning as pl
-
 from data import MS2Demos, get_padding_fn
 from autocot import (
     KeyNetConfig,
     FutureNetConfig,
-    ImplicitSAResFCConfig,
-    ImplicitSAGPTConfig,
-    ExplicitSAGPTConfig,
     ExplicitSAHNGPTConfig,
-    ExplicitSAHNConfig,
     RecNetConfig,
     AutoCoT
 )
-from lr_scheduler import CosineAnnealingLRWarmup
-from pytorch_lightning.callbacks import ModelCheckpoint
 from callbacks import MySaveLogger
-
 from path import MODEL_PATH
 
 '''
@@ -137,7 +125,6 @@ def parse_args():
                         help="Duplicate the dataset to reduce data loader overhead.")
     parser.add_argument('--train_half', action='store_true',
                         help="train half (do not optimize gen goal loss)")
-
     parser.add_argument('--train_mode', default='scratch', type=str,
                         help="training mode")  # 3 choices: 'scratch', 'pretrain', 'finetune'
 
@@ -146,10 +133,6 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    # assert args.model_name != '', 'Should specify --model_name'
-    print(args)
-
-    # str_repulse = 'attract_and_repulse' if args.repulse else 'attract_only'
 
     auto_model_name = \
         args.model_name \
@@ -167,9 +150,6 @@ if __name__ == "__main__":
         + '-cluster' + args.coe_cluster + '-rec' + args.coe_rec + ('-use_decay_mask_rate' if args.use_decay_mask_rate else '') \
         + ('-train_half' if args.train_half else '') \
         + ('-finetune' if args.train_mode == 'finetune' else '')
-
-
-    # + '-ss' + args.c_ss + '-sh' + args.c_sh + '-hs' + args.c_hs + '-hh' + args.c_hh \
 
     print('Model name:', auto_model_name)
 
@@ -232,40 +212,8 @@ if __name__ == "__main__":
         )
     else:
         future_config = None
-    if args.sa_type == 'resfc':
-        sa_config = ImplicitSAResFCConfig(
-            n_embd=args.n_embd,
-            block_size=args.context_length,
-            n_state_layer=args.n_state_layer,
-            n_action_layer=args.n_action_layer,
-            max_timestep=train_dataset.max_steps,
-            use_pos_emb=args.use_pos_emb
-        )
-    elif args.sa_type == 'gpt':
-        sa_config = ImplicitSAGPTConfig(
-            n_embd=args.n_embd,
-            n_head=args.n_head,
-            attn_pdrop=float(args.dropout),
-            resid_pdrop=float(args.dropout),
-            embd_pdrop=float(args.dropout),
-            block_size=args.context_length,
-            n_layer=args.n_state_layer+args.n_action_layer,
-            state_layer=args.n_state_layer-1,
-            max_timestep=train_dataset.max_steps
-        )
-    elif args.sa_type == 'egpt':
-        sa_config = ExplicitSAGPTConfig(
-            n_embd=args.n_embd,
-            n_head=args.n_head,
-            attn_pdrop=float(args.dropout),
-            resid_pdrop=float(args.dropout),
-            embd_pdrop=float(args.dropout),
-            block_size=args.context_length,
-            n_layer=args.n_action_layer,
-            n_state_layer=args.n_state_layer,
-            max_timestep=train_dataset.max_steps
-        )
-    elif args.sa_type == 'egpthn':
+
+    if args.sa_type == 'egpthn':
         sa_config = ExplicitSAHNGPTConfig(
             n_embd=args.n_embd,
             n_head=args.n_head,
@@ -279,17 +227,9 @@ if __name__ == "__main__":
             max_timestep=train_dataset.max_steps,
             use_future_state=args.use_future_state
         )
-    elif args.sa_type == 'hn':
-        sa_config = ExplicitSAHNConfig(
-            dim_h=args.n_embd * args.n_state_layer,
-            block_size=args.context_length,
-            use_pos_emb=args.use_pos_emb,
-            reward_layer=args.n_state_layer,
-            max_timestep=train_dataset.max_steps
-        )
     else:
         # should not reach here
-        print('unknown sa_config.type')
+        print('suggest using sa_config.type = \'egpthn\'')
         assert False
 
     optimizer_config = {
@@ -316,12 +256,6 @@ if __name__ == "__main__":
         }
     else:
         scheduler_config = None
-
-    # if args.vq_use_clip_decrease_r:
-    #     # calculate the bound
-    #     vq_bound_clip_decrease_r = (0.999 - 0.001) / (args.n_iters / (len(train_dataset) / args.batch_size))
-    # else:
-    #     vq_bound_clip_decrease_r = None
 
     autocot_model = AutoCoT(
         key_config=key_config,
@@ -397,6 +331,7 @@ if __name__ == "__main__":
             'metadata': vars(args)
         }, os.path.join(MODEL_PATH, args.task + '_REC_CHECKPOINT' + ('_R' if args.vq_use_r else '') + '.pth'))
         print('Done!')
+
     elif args.train_mode == 'finetune':
         autocot_model.mode = 'goal'
         rec_path = os.path.join(MODEL_PATH, args.task + '_REC_CHECKPOINT' + ('_R' if args.vq_use_r else '') + '.pth')

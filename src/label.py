@@ -1,28 +1,15 @@
 import os
 import numpy as np
 import argparse
-from tqdm import tqdm
-from collections import defaultdict
 import h5py
-
-from mani_skill2.utils.io_utils import load_json
-import mani_skill2.envs
 import torch
-
 from autocot import (
     RecNetConfig,
     KeyNetConfig,
     FutureNetConfig,
-    ImplicitSAGPTConfig,
-    ExplicitSAGPTConfig,
     ExplicitSAHNGPTConfig,
-    ImplicitSAResFCConfig,
-    ExplicitSAHNConfig,
     AutoCoT
 )
-
-from vec_env import get_mp_envs  # Used for parallel evaluation.
-
 from path import MODEL_PATH, DATA_PATH
 
 
@@ -36,11 +23,6 @@ def predict(model, action_hist, state_hist, unified_t_hist, t):
         actions = torch.stack(action_hist, 1).float().to(model.device)
     states = torch.stack(state_hist, 1).float().to(model.device)
     unified_t = torch.stack(unified_t_hist, 1).float().to(model.device)
-    # print(states.shape)
-    # print(unified_t.squeeze(2).shape)
-
-    # print('shape of states:', states.shape)
-    # print('shape of timesteps', timesteps.shape)
 
     # use the label_single method in AutoCoT
     indices = model.label_single(states, timesteps, unified_t.squeeze(2), actions)
@@ -67,8 +49,6 @@ def parse_args():
     parser.add_argument("--pause", action='store_true', help="debug")
     parser.add_argument("--key_name", default="keys.txt", type=str, help="file name of labeled out key states.")
 
-    # parser.add_argument("--eval_max_steps", default=200, type=int, help="Max steps allowed in eval.")
-
     return parser.parse_args()
 
 
@@ -86,15 +66,12 @@ if __name__ == "__main__":
     # Load to cpu first to avoid cuda related errors from ManiSkill2.
     ckpt = torch.load(path, map_location=torch.device('cpu'))
     state_dict_from_ckpt, params = ckpt['module'], ckpt['metadata']
-    # print(state_dict_from_ckpt['key_book.embedding.weight'].shape)
 
     state_dim = state_dict_from_ckpt['key_net.state_encoder.net.0.weight'].shape[1]
     action_dim = state_dict_from_ckpt['key_net.action_encoder.net.0.weight'].shape[1]
     key_dim = params['dim_key']
     e_dim = params['dim_e']
 
-    # if params['use_key_energy'] is True:
-    #     key_dim -= state_dim
     max_timestep = state_dict_from_ckpt['key_net.global_pos_emb'].shape[1]
     print('Loaded ckpt from:', path)
     # Load demos to fetch the env. seeds used in training.
@@ -108,45 +85,16 @@ if __name__ == "__main__":
     length = args.n_traj
     if length == -1:
         length = len(traj_all)
-    # np.random.seed(args.seed)
-    # # If you use the same seed, you can get same trajectory choice
-    # # Since TurnFaucet-v0 uses 10 different faucet models, we shuffle the data
-    # # such that the resulting sampled data are evenly sampled across faucet models.
-    # if args.task == 'TurnFaucet-v0':
-    #     ids = []
-    #     for i in range(10):  # Hard-code the 10 data splits for permutation.
-    #         t_ids = np.random.permutation(len(traj_all) // 10)[:length // 10]
-    #         t_ids += i * len(traj_all) // 10
-    #         ids.append(t_ids)
-    #     ids = np.concatenate(ids)
-    # # Since PushChair uses 5 different faucet models, we shuffle the data
-    # # such that the resulting sampled data are evenly sampled across chair models.
-    # elif args.task == 'PushChair-v1':
-    #     ids = []
-    #     for i in range(5):  # Hard-code the 5 data splits for permutation.
-    #         t_ids = np.random.permutation(len(traj_all) // 5)[:length // 5]
-    #         t_ids += i * len(traj_all) // 5
-    #         ids.append(t_ids)
-    #     ids = np.concatenate(ids)
-    # else:
-    #     ids = np.random.permutation(len(traj_all))[:length]
+
     ids = np.arange(length)
 
     dataset['env_states'] = [np.array(traj_all[f"traj_{i}"]['env_states']) for i in ids]
     dataset['obs'] = [np.array(traj_all[f"traj_{i}"]["obs"]) for i in ids]
     dataset['actions'] = [np.array(traj_all[f"traj_{i}"]["actions"]) for i in ids]
 
-    print(dataset['env_states'][0].shape[0])
-
-    # dataset['key_label'] = [[None for j in range(dataset['env_states'][idx].shape[0])] for idx in range(length)]
-    # dataset['key_states_gt'] = list()
     key_states_gts = list()
 
     max_steps = np.max(len(s) for s in dataset['env_states'])
-
-    # print(dataset['env_states'][0].shape, type(dataset['env_states'][0]))
-    # print(dataset['obs'][0].shape, type(dataset['obs'][0]))
-    # print(dataset['actions'][0].shape, type(dataset['actions'][0]))
 
     for k in traj_all['traj_0']['infos'].keys():
         dataset[f'infos/{k}'] = [np.array(traj_all[f"traj_{i}"]["infos"][k]) for i in ids]
@@ -244,10 +192,6 @@ if __name__ == "__main__":
             key_states_gt.append(('end', dataset['env_states'][idx].shape[0] - 1))
             key_states_gts.append(key_states_gt)
 
-    for ksgt in key_states_gts:
-        for i, ks in enumerate(ksgt):
-            print(f'#{i}', ks[0], ks[1])
-
     key_config = KeyNetConfig(
         n_embd=params['n_embd'],
         n_head=params['n_head'],
@@ -282,69 +226,21 @@ if __name__ == "__main__":
     else:
         future_config = None
 
+    assert params['sa_type'] == 'egpthn'
+    sa_config = ExplicitSAHNGPTConfig(
+        n_embd=params['n_embd'],
+        n_head=params['n_head'],
+        attn_pdrop=float(params['dropout']),
+        resid_pdrop=float(params['dropout']),
+        embd_pdrop=float(params['dropout']),
+        block_size=params['context_length'],
+        n_layer=params['n_action_layer'],
+        n_state_layer=params['n_state_layer'],
+        max_timestep=max_timestep,
+        use_skip=params['use_skip'],
+        use_future_state=False if 'use_future_state' not in params.keys() else params['use_future_state']
+    )
 
-    if params['sa_type'] == 'resfc':
-        sa_config = ImplicitSAResFCConfig(
-            n_embd=params['n_embd'],
-            block_size=params['context_length'],
-            n_state_layer=params['n_state_layer'],
-            n_action_layer=params['n_action_layer'],
-            max_timestep=max_timestep,
-            use_pos_emb=params['use_pos_emb']
-        )
-    elif params['sa_type'] == 'gpt':
-        sa_config = ImplicitSAGPTConfig(
-            n_embd=params['n_embd'],
-            n_head=params['n_head'],
-            attn_pdrop=float(params['dropout']),
-            resid_pdrop=float(params['dropout']),
-            embd_pdrop=float(params['dropout']),
-            block_size=params['context_length'],
-            n_layer=params['n_state_layer']+params['n_action_layer'],
-            state_layer=params['n_state_layer']-1,
-            max_timestep=max_timestep
-        )
-    elif params['sa_type'] == 'egpt':
-        sa_config = ExplicitSAGPTConfig(
-            n_embd=params['n_embd'],
-            n_head=params['n_head'],
-            attn_pdrop=float(params['dropout']),
-            resid_pdrop=float(params['dropout']),
-            embd_pdrop=float(params['dropout']),
-            block_size=params['context_length'],
-            n_layer=params['n_action_layer'],
-            n_state_layer=params['n_state_layer'],
-            max_timestep=max_timestep
-        )
-    elif params['sa_type'] == 'egpthn':
-        sa_config = ExplicitSAHNGPTConfig(
-            n_embd=params['n_embd'],
-            n_head=params['n_head'],
-            attn_pdrop=float(params['dropout']),
-            resid_pdrop=float(params['dropout']),
-            embd_pdrop=float(params['dropout']),
-            block_size=params['context_length'],
-            n_layer=params['n_action_layer'],
-            n_state_layer=params['n_state_layer'],
-            max_timestep=max_timestep,
-            use_skip=params['use_skip'],
-            use_future_state=False if 'use_future_state' not in params.keys() else params['use_future_state']
-        )
-    elif params['sa_type'] == 'hn':
-        sa_config = ExplicitSAHNConfig(
-            dim_h=params['n_embd'] * params['n_state_layer'],
-            block_size=params['context_length'],
-            use_pos_emb=params['use_pos_emb'],
-            reward_layer=params['n_state_layer'],
-            max_timestep=max_timestep
-        )
-    else:
-        # should not reach here
-        print('Unknown sa_type')
-        assert False
-
-    print(params['vq_n_e'])
-    print('stat_dim', state_dim)
     autocot_model = AutoCoT(
         key_config=key_config,
         sa_config=sa_config,
@@ -370,7 +266,7 @@ if __name__ == "__main__":
 
     bias_sum = 0.0
 
-    with open(traj_save_keys_path + '/keys-long5.txt', 'w') as fk:
+    with open(traj_save_keys_path + '/' + args.key_name, 'w') as fk:
         for i_traj in range(length):
             traj_state = dataset['obs'][i_traj]
             traj_action = dataset['actions'][i_traj]
@@ -426,24 +322,19 @@ if __name__ == "__main__":
                     unified_t_hist.append(unified_t[step + 1: step + 2])
 
             if current_label != -1:
-                print(f'key {current_label}\t[{i_begin}, {traj_action.shape[0] - 1}]', end='')
+                print(f'key {current_label}\t[{i_begin}, {traj_action.shape[0]}]', end='')
                 for i_gt in range(len(key_states_gt)):
-                    if i_begin <= key_states_gt[i_gt][1] <= (traj_action.shape[0] - 1):
+                    if i_begin <= key_states_gt[i_gt][1] <= traj_action.shape[0]:
                         print(f'\tgt key states', key_states_gt[i_gt][1], key_states_gt[i_gt][0], end='')
                 print()
-                key_state_step[current_label] = traj_action.shape[0] - 1
+                key_state_step[current_label] = traj_action.shape[0]
 
             print(key_state_step)
             for i_gt in range(len(key_states_gt) - 1):
                 key_state_step_gt = key_states_gt[i_gt][1]
-                # print(key_state_step_gt)
                 key_state_large = torch.tensor(key_state_step) - key_state_step_gt
-                # print(key_state_large)
                 key_state_large = torch.where(torch.ge(key_state_large, 0), key_state_large, float('+inf'))
-                # print(key_state_large)
                 bias_sum += torch.min(key_state_large).item()
-                # print(bias_sum)
-                # input()
 
             for item in key_state_step:
                 fk.write(str(item) + ',')

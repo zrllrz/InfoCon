@@ -9,8 +9,6 @@ References:
 
 import sys
 sys.path.append("/home/rzliu/AutoCoT/src/module")
-
-import numpy as np
 import math
 import torch
 import torch.nn as nn

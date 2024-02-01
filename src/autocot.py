@@ -1,25 +1,12 @@
 import sys
 sys.path.append("/home/rzliu/AutoCoT/src/module")
-
-import numpy as np
-from math import exp, pow, log, cos, sin, pi
+from math import cos, pi
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-from module.module_util import FreqEncoder, TimeSphereEncoder, mereNLL
-from module.VQ import VQClassifierNNTime, VQClassifierNN, VQClassifier, VQNeighbor, VQNeighbor2, VQNeighborBasic
-from module.GPT import KeyNet, RecNet, FutureNet, ImplicitSAGPT, ExplicitSAGPT, ExplicitSAHNGPT, ActCommitNet, ENet, MLP
-from module.ResNetFC import ImplicitSAResFC, ExplicitSAHN
-
+from module.VQ import VQClassifierNNTime
+from module.GPT import KeyNet, RecNet, FutureNet, ExplicitSAHNGPT
 import pytorch_lightning as pl
-
-from torch.optim.lr_scheduler import LambdaLR, MultiStepLR
 from lr_scheduler import CosineAnnealingLRWarmup
-
-from einops import rearrange
-
-from util import anomaly_score, cos_anomaly_score, mse_loss_with_weights, get_loss, init_centroids, init_centroids_neighbor
+from util import get_loss
 
 
 class RootConfig:
@@ -48,52 +35,6 @@ class KeyNetConfig(RootConfig):
         )
 
 
-class ImplicitSAResFCConfig:
-    def __init__(self, n_embd, block_size, use_pos_emb, n_state_layer, n_action_layer, max_timestep):
-        self.type = 'resfc'
-        self.n_embd = n_embd
-        self.n_state_layer = n_state_layer
-        self.n_action_layer = n_action_layer
-        self.block_size = block_size
-        self.use_pos_emb = use_pos_emb
-        self.max_timestep = max_timestep
-
-
-class ExplicitSAHNConfig:
-    def __init__(self, dim_h, block_size, use_pos_emb, reward_layer, max_timestep):
-        self.type = 'hn'
-        self.dim_h = dim_h
-        self.reward_layer = reward_layer
-        self.block_size = block_size
-        self.use_pos_emb = use_pos_emb
-        self.max_timestep = max_timestep
-
-
-class ImplicitSAGPTConfig(RootConfig):
-    def __init__(self, n_embd, n_head,
-                 attn_pdrop, resid_pdrop, embd_pdrop,
-                 block_size, n_layer, state_layer, max_timestep):
-        self.type = 'gpt'
-        super().__init__(
-            n_embd, n_head,
-            attn_pdrop, resid_pdrop, embd_pdrop,
-            block_size, 'w_key', n_layer, max_timestep
-        )
-        self.state_layer = state_layer
-
-
-class ExplicitSAGPTConfig(RootConfig):
-    def __init__(self, n_embd, n_head,
-                 attn_pdrop, resid_pdrop, embd_pdrop,
-                 block_size, n_layer, n_state_layer, max_timestep):
-        self.type = 'egpt'
-        super().__init__(
-            n_embd, n_head,
-            attn_pdrop, resid_pdrop, embd_pdrop,
-            block_size, 'w_key', n_layer, max_timestep
-        )
-        self.n_state_layer = n_state_layer
-
 class ExplicitSAHNGPTConfig(RootConfig):
     def __init__(self, n_embd, n_head,
                  attn_pdrop, resid_pdrop, embd_pdrop,
@@ -107,17 +48,6 @@ class ExplicitSAHNGPTConfig(RootConfig):
         self.n_state_layer = n_state_layer
         self.use_skip = use_skip
         self.use_future_state = use_future_state
-
-
-class ENetConfig(RootConfig):
-    def __init__(self, n_embd, n_head,
-                 attn_pdrop, resid_pdrop, embd_pdrop,
-                 block_size, n_layer, max_timestep):
-        super().__init__(
-            n_embd, n_head,
-            attn_pdrop, resid_pdrop, embd_pdrop,
-            block_size, '-', n_layer, max_timestep
-        )
 
 
 class RecNetConfig(RootConfig):
@@ -216,19 +146,7 @@ class AutoCoT(pl.LightningModule):
             )
 
         self.sa_type = sa_config.type
-        if sa_config.type == 'resfc':
-            print('do not use it')
-            assert False
-        elif sa_config.type == 'gpt':
-            print('do not use it')
-            assert False
-        elif sa_config.type == 'hn':
-            print('do not use it')
-            assert False
-        elif sa_config.type == 'egpt':
-            print('do not use it')
-            assert False
-        elif sa_config.type == 'egpthn':
+        if sa_config.type == 'egpthn':
             self.sa_net = ExplicitSAHNGPT(
                 config=sa_config,
                 state_dim=state_dim,
@@ -237,7 +155,7 @@ class AutoCoT(pl.LightningModule):
                 KT=KT,
             )
         else:
-            print('unknown sa_config.type')
+            print('suggest using sa_config.type = \'egpthn\'')
             assert False
 
         # key_book, use for vq mapping
