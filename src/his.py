@@ -16,6 +16,7 @@ def parse_args():
     parser.add_argument('--obs_mode', type=str, default='state',
                         help="State mode used in envs from ManiSkill2.")
     parser.add_argument("--seed", default=0, type=int, help="Random seed for data spliting.")
+    parser.add_argument("--key_name", default="keys.txt", type=str, help="log of key states")
 
     return parser.parse_args()
 
@@ -140,7 +141,7 @@ if __name__ == "__main__":
 
     bias_sum = 0.0
 
-    with open(traj_save_keys_path + '/keys-clip.txt', 'r') as fk:
+    with open(traj_save_keys_path + '/' + args.key_name, 'r') as fk:
         for i_traj in range(length):
             # gt key states
             key_states_gt = key_states_gts[i_traj]

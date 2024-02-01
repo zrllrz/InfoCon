@@ -1,21 +1,28 @@
 #!/bin/bash
 
+FILE_DIR="model_checkpoints/"
 TASK=PickCube-v0
 MODEL_NAME=PC_0906_1003k4-r4-f2-c10_KT0.1_EMA0.9_ema_ave_st-emb1.2-r_l10.0-use_r-egpthn_s2_a1-emb128-key128-e128-cluster0.001-rec0.1-finetune
-I=4000
-
+I=3900
 
 cd src &&
 
-CUDA_VISIBLE_DEVICES=2 python label.py \
-  --task=$TASK --control_mode=pd_joint_delta_pos --obs_mode=state \
-  --seed=0 \
-  --n_traj=-1 \
-  --model_name=$MODEL_NAME \
-  --from_ckpt=$I \
+while [[ $I -ge 2000 ]];
+do
+  if test -e "$FILE_DIR$MODEL_NAME""/epoch""$I.pth"; then
+    CUDA_VISIBLE_DEVICES=2 python label.py \
+      --task=$TASK --control_mode=pd_joint_delta_pos --obs_mode=state \
+      --seed=0 \
+      --n_traj=-1 \
+      --model_name=$MODEL_NAME \
+      --from_ckpt=$I
+  else
+    echo "wait"
+  fi
+  ((I-=100))
+done
 
-
-# for ((i=2000; i<=4000; i+=100));do
+#for ((i=2000; i<=4000; i+=100));do
 #  CUDA_VISIBLE_DEVICES=2 python label.py \
 #   --task=StackCube-v0 --control_mode=pd_joint_delta_pos --obs_mode=state \
 #   --seed=0 \
@@ -146,7 +153,7 @@ CUDA_VISIBLE_DEVICES=2 python label.py \
 # 3900  36.37             24.01
 # 4000  38.57             26.80
 
-# WOGG
+# WOSG
 #       PegInsertionSide  StackCube
 # 2000  18.97             13.96
 # 2100  28.87             20.81
@@ -169,4 +176,5 @@ CUDA_VISIBLE_DEVICES=2 python label.py \
 # 3800  19.43             9.39
 # 3900  16.16             26.22
 # 4000  13.01             17.14
+
 
