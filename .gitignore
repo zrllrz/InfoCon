@@ -6,6 +6,14 @@ CoTPC-main/src/TurnFaucet-v0_eval
 CoTPC-main/src/PegInsertionSide-v0_eval
 CoTPC-main/src/PickCube-v0_eval
 CoTPC-main/src/StackCube-v0_eval
+CoTPC-main/src/data_autocot_cat.py
+CoTPC-main/src/eval_cat.py
+CoTPC-main/src/key_statistics.py
+CoTPC-main/src/model_cat.py
+CoTPC-main/src/rgbd.py
+CoTPC-main/src/save_vision.py
+CoTPC-main/src/train_cat.py
+CoTPC-main/src/video_scripts.py
 CoTPC-main/save_model
 CoTPC-main/replay_policy
 Docs
