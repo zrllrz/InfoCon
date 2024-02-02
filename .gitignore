@@ -24,6 +24,7 @@ train_scripts.sh
 val_label.sh
 val_pc.sh
 val_test.sh
+.DS_Store
 
 __pycache__
 lightning_logs
