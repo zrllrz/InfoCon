@@ -1,0 +1,4 @@
+TurnFaucet-v0 TF_LAST 1800000
+success 47.80
+test/success 46.00
+test_h/success 21.00
