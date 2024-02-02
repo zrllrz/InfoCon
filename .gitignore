@@ -32,6 +32,12 @@ CoTPC-main/replay_policy
 src/module/GPT2.py
 src/module/GPT3.py
 src/module/ResNetFC.py
+src/label_clip.py
+src/label_waypoint.py
+src/PegInsertionSide-v0_label_output.txt
+src/PickCube-v0_label_output.txt
+src/StackCube-v0_label_output.txt
+src/TurnFaucet-v0_label_output.txt
 Docs
 maniskill2_test
 mytemp
