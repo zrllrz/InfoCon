@@ -149,16 +149,9 @@ class MS2Demos(Dataset):
     def get_key_states(self, idx):
         # Note that `infos` is for the next obs rather than the current obs.
         # Thus, we need to offset the `step_idx`` by one.
-
         key_state_step = self.data['key_state_step'][idx]
-        # print('key_state_step =', key_state_step)
-
         key_states = [self.data['obs'][idx][step] for step in key_state_step]
-        # print('key_states', key_states)
-
         key_state_mask = np.array([1.0 * (step != -1) for step in key_state_step])
-        # print('key_state_mask', key_states)
-
         key_states = np.stack(key_states, 0).astype(np.float32)
         assert len(key_states) > 0, self.task
         return key_states, key_state_mask
