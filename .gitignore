@@ -29,6 +29,9 @@ CoTPC-main/src/train_cat.py
 CoTPC-main/src/video_scripts.py
 CoTPC-main/save_model
 CoTPC-main/replay_policy
+src/module/GPT2.py
+src/module/GPT3.py
+src/module/ResNetFC.py
 Docs
 maniskill2_test
 mytemp
