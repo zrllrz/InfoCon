@@ -124,27 +124,11 @@ class MS2Demos(Dataset):
         # Note that the size of `env_states` and `obs` is that of the others + 1.
         # And most `infos` is for the next obs rather than the current obs.
 
-        # `env_states` is used for reseting the env (might be helpful for eval)
-        # `obs` is the observation of each step.
-        # dataset['obs'] = [np.array(traj_all[f"traj_{i}"]["obs"]) for i in ids]
-        # if self.control_mode == 'pd_joint_delta_pos':
-        #     dataset['obs'] = [np.concatenate([np.array(traj_all[f"traj_{i}"]["obs"])[:, :9],
-        #                                       np.array(traj_all[f"traj_{i}"]["obs"])[:, 18:],], -1) for i in ids]
-        # elif self.control_mode == 'base_pd_joint_vel_arm_pd_joint_vel':
-        #     slices = [slice(0, 19), slice(38, 41), slice(44, 51), slice(57, 82), slice(107, 119)]
-        #     dataset['obs'] = [np.concatenate([np.array(traj_all[f"traj_{i}"]["obs"])[:, s] for s in slices], -1) for i in ids]
-        # else:
-
         dataset['obs'] = [np.array(traj_all[f"traj_{i}"]["obs"]) for i in ids]
 
         dataset['env_states'] = [np.array(
             traj_all[f"traj_{i}"]['env_states']) for i in ids]
         dataset['actions'] = [np.array(traj_all[f"traj_{i}"]["actions"]) for i in ids]
-
-        # actions = np.concatenate(dataset['actions'])
-        # actions_std = np.std(actions, 0)
-        # dataset['actions'] = [
-        #    np.array(traj_all[f"traj_{i}"]["actions"]) / (actions_std + 1e-7) for i in ids]
 
         # `rewards` is not currently used in CoTPC training.
         dataset['rewards'] = [np.array(traj_all[f"traj_{i}"]["rewards"]) for i in ids]
