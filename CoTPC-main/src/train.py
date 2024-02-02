@@ -126,10 +126,7 @@ def get_loss(preds, targets, lengths):
 
 
 if __name__ == "__main__":
-
     args = parse_args()
-    print(args.keys_name)
-    input()
     assert args.model_name != '', 'Should specify --model_name'
     print('Model name:', args.model_name)
 
@@ -146,7 +143,6 @@ if __name__ == "__main__":
     else:
         args_key_states, args_key_state_loss = 'a', '0'
     print(args_key_states, args_key_state_loss)
-
 
     train_dataset = MS2Demos(
         control_mode=args.control_mode,
