@@ -3,7 +3,7 @@ import numpy as np
 import argparse
 import h5py
 import torch
-from autocot import (
+from infocon import (
     RecNetConfig,
     KeyNetConfig,
     FutureNetConfig,

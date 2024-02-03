@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 from data import MS2Demos, get_padding_fn
-from autocot import (
+from infocon import (
     KeyNetConfig,
     FutureNetConfig,
     ExplicitSAHNGPTConfig,
