@@ -22,8 +22,10 @@ pip install -r requirements.txt
 
 ## Usage
 
+### Preparing Data-set
+
 ### Training InfoCon
-Use `train.sh` in director `/`. Parameters:
+Use `train.sh` in directory `/`. Parameters:
 <details>
 
 `n_iters` Number of training iterations.
@@ -137,12 +139,34 @@ Use `train.sh` in director `/`. Parameters:
 </details>
 
 ### Labeling by InfoCon
-Use `label.sh` in director `/`. Parameters:
+Use `label.sh` in directory `/`. Parameters:
 <details>
-Releasing :)
+
+`task` type=str default='PegInsertionSide-v0' Task (env-id) in ManiSkill2.
+
+`control_mode` type=str default='pd_joint_delta_pos' Control mode used in envs from ManiSkill2.
+
+`obs_mode` type=str default='state' State mode used in envs from ManiSkill2.
+
+`seed` default=0 type=int Random seed for data spliting.
+
+`n_traj` default=100 type=int num of validation trajectory.
+
+`model_name` default='' type=str Model name to be loaded.
+
+`from_ckpt` default=-1 type=int Ckpt of the module to be loaded.
+
+`pause` action='store_true' debug
+
+`key_name` default="keys.txt" str file name of labeled out key states.
 </details>
 
 ### CoTPC Evaluation
+
+Use `train.sh` in directory `/CoTPC-main/scripts/` to train CoTPC policies. Parameters:
+<details>
+:)
+</details>
 
 <!--
 ## CoTPC-main/
