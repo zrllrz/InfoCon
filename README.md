@@ -24,6 +24,7 @@ pip install -r requirements.txt
 
 ### Training InfoCon
 Use `train.sh` in director `/`. Parameters:
+<details>
 
 `n_iters` Number of training iterations.
 
@@ -33,17 +34,17 @@ Use `train.sh` in director `/`. Parameters:
 
 `weight_decay` Weight decay coefficient.
 
-`beta1` Beta1 in the Adam optimizer.
+`beta1` Beta1 in the AdamW optimizer.
 
-`beta2` Beta2 in the Adam optimizer.
+`beta2` Beta2 in the AdamW optimizer.
 
 `dropout` Dropout probability.
 
-`lr_schedule` The learning rate schedule.
+`lr_schedule` Learning rate schedule. Selection: `CosineAnnealingLRWarmup`, `MultiStepLR`
 
-`t_warmup` (Make sure you're using `CosineAnnealingLRWarmup`) Warm-up iteration steps
+`t_warmup` (Make sure you're using `CosineAnnealingLRWarmup`) Number of warming-up iterations
 
-`milestones` (Make sure you're using `MultiStepLR`) Time steps to decay lr
+`milestones` (Make sure you're using `MultiStepLR`) Number of iterations before decay lr
 
 `gamma` (Make sure you're using `MultiStepLR`) Decay of lr after each milestone step
 
@@ -132,6 +133,8 @@ Use `train.sh` in director `/`. Parameters:
 `train_half` action='store_true' train half (do not optimize gen goal loss)
 
 `train_mode` default='scratch' type=str training mode
+
+</details>
 
 ### Labeling by InfoCon
 
