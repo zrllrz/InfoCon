@@ -1,6 +1,6 @@
 bash_scripts
 checkpoints
-CoTPC-main/data
+CoTPC-main/data/
 CoTPC-main/scripts/cat_eval.sh
 CoTPC-main/scripts/eval_cat.sh
 CoTPC-main/scripts/eval_pc.sh
