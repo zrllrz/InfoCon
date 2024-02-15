@@ -232,9 +232,27 @@ Use `train.sh` in directory `/CoTPC-main/scripts/` to train CoTPC policies. Para
 
 </details>
 
-Use `train.sh` in directory `/CoTPC-main/scripts/` to train CoTPC policies. Parameters:
+Use `eval.sh`in directory `/CoTPC-main/scripts/` to train CoTPC policies. Parameters:
 <details>
-:)
+
+`task` type=str default='PickCube-v0' Task (env-id) in ManiSkill2.
+
+`control_mode` type=str default='pd_joint_delta_pos' Control mode used in envs from ManiSkill2.
+
+`obs_mode` type=str default='state' State mode used in envs from ManiSkill2.
+
+`seed` default=0 type=int, Random seed for data spliting.
+
+`model_name` default='' type=str Model name to be loaded.
+
+`from_ckpt` default=-1 type=int Ckpt of the model to be loaded.
+
+`eval_max_steps` default=200 type=int Max steps allowed in eval.
+
+`cot_decoder` type=str default='256' Specs of the CoT decoder.
+
+`n_env` type=int default=25 Num of process for eval.
+
 </details>
 
 
