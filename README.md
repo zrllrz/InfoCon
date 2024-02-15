@@ -23,7 +23,7 @@ pip install -r requirements.txt
 ## Usage
 
 ### Preparing Data-set
-[Reference](https://github.com/SeanJia/CoTPC) [Download demo trajectories](https://drive.google.com/drive/folders/1VdunXUlzqAvy-D8MniQ4anhV5LLBfNbJ).
+[[Reference]](https://github.com/SeanJia/CoTPC) [[Download demo trajectories]](https://drive.google.com/drive/folders/1VdunXUlzqAvy-D8MniQ4anhV5LLBfNbJ).
 Each folder has a `*.h5` file (for actual trajectories) and a `*.json` file (for metadata regarding the trajectories).
 Each task has over 1000 demo trajectories.
 Each trajectory comes with a different env configurations (i.e., env seed, which influences object poses, object geometries, etc.).
