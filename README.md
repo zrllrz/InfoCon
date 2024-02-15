@@ -140,7 +140,7 @@ Use `train.sh` in director `/`. Parameters:
 Use `label.sh` in director `/`. Parameters:
 <details>
 Releasing :)
-</details>>
+</details>
 
 ### CoTPC Evaluation
 
