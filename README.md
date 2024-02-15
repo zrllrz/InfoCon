@@ -23,6 +23,8 @@ pip install -r requirements.txt
 ## Usage
 
 ### Training InfoCon
+Use `train.sh` in director `/`. Parameters:
+
 `n_iters` Number of training iterations.
 
 `batch_size` Batch size.
