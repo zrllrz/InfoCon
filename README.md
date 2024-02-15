@@ -22,9 +22,116 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Training
+### Training InfoCon
+`n_iters` Number of training iterations.
 
-### Labeling
+`batch_size` Batch size.
+
+`init_lr` The initial learning rate.
+
+`weight_decay` Weight decay coefficient.
+
+`beta1` Beta1 in the Adam optimizer.
+
+`beta2` Beta2 in the Adam optimizer.
+
+`dropout` Dropout probability.
+
+`lr_schedule` The learning rate schedule.
+
+`t_warmup` (Make sure you're using `CosineAnnealingLRWarmup`) Warm-up iteration steps
+
+`milestones` (Make sure you're using `MultiStepLR`) Time steps to decay lr
+
+`gamma` (Make sure you're using `MultiStepLR`) Decay of lr after each milestone step
+
+`n_head` Number of attention heads.
+
+`n_embd` Hidden feature dimension.
+
+`dim_key` Hidden feature dimension.
+
+`dim_e` Hidden feature dimension.
+
+`n_key_layer` Number of attention layers in KeyNet.
+
+`n_rec_layer` Number of attention layers in RecNet.
+
+`n_future_layer` Number of attention layers in FutureNet.
+
+`vq_n_e` How many kinds of keys in the key_book.
+
+`vq_use_r` Use learnable radius of prototype.
+
+`vq_coe_ema` type=str default='0.95' ema moving rate.
+
+`vq_ema_ave` action='store_true' average or not
+
+`KT` type=str default='1.0' Temperature for classifier
+
+`vq_use_ft_emb` action='store_true' use frequent time step embedding
+
+`vq_use_st_emb` action='store_true' use spherical time step embedding
+
+`vq_st_emb_rate` default='1.2' type=str division rate for time sphere embedding
+
+`vq_coe_r_l1` default='0.0' type=str l1 regularization on length of every prototype
+
+`vq_use_prob_sel_train` action='store_true' If true, using prob sample when training
+
+`vq_use_timestep_appeal` action='store_true' If true, prototype will move close to time in time interval
+
+`coe_cluster` default='0.1' type=str cluster weight
+
+`coe_rec` default='1.0' type=str reconstruction weight from key_soft
+
+`use_decay_mask_rate` action='store_true' mask cluster item when it's policy is too large
+
+`sa_type` default='gpt' type=str choices=['gpt', 'egpt', 'egpthn', 'resfc', 'hn'] type of sa_net
+
+`n_state_layer` default=1 type=int Number of layers for state prediction in SANet
+
+`n_action_layer` default=1 type=int Number of layers (after state prediction) for action prediction in SANet
+
+`use_pos_emb` action='store_true', if True, use key energy gradient to evaluate effect of key states, only use when resfc
+
+`use_skip` action='store_true' if True, use skip connection for HN generated net when using HN
+
+`use_future_state` action='store_true' if True, we will append the future states
+
+`model_name` default='TEST' type=str Model name (for storing ckpts).
+    
+`from_model_name` default='' type=str Name of the pretrained module.
+
+`from_ckpt` default=-1 type=int Ckpt of pretrained module.
+
+`task` type=str default='PegInsertionSide-v0' Task (env-id) in ManiSkill2.
+
+`control_mode` type=str default='pd_joint_delta_pos' Control mode used in envs from ManiSkill2.
+
+`obs_mode` type=str default='state' State mode used in envs from ManiSkill2.
+
+`seed` default=0 type=int Random seed for data spliting.
+
+`num_traj` default=-1 type=int Number of training trajectories.
+
+`context_length` type=int default=60 Context size of CoTPC (the maximium length of sequences sampled from demo trajectories in training).
+
+`min_seq_length` type=int default=60 Mininum length of sequences sampled from demo trajectories in training.
+
+`save_every` default=10 type=int Save module every [input] epoch.
+
+`log_every` default=10 type=int log metrics every [input] iters.
+
+`num_workers` default=5 type=int A positive number for fast async data loading.
+
+`multiplier` type=int default=52 Duplicate the dataset to reduce data loader overhead.
+
+`train_half` action='store_true' train half (do not optimize gen goal loss)
+
+`train_mode` default='scratch' type=str training mode
+
+### Labeling by InfoCon
 
 ### CoTPC Evaluation
 
