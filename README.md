@@ -33,6 +33,8 @@ Provided by CoTPC team, there are additional flags for the tasks indicating the 
 For the task `TurnFaucet-v0`, they use a subset of 10 faucet models for the demos.
 If you want to generate visual-based demos, please refer to the official ManiSkill2 guidance [here](https://github.com/haosulab/ManiSkill2#demonstrations).
 
+Put the folder of each task under directory `/CoTPC-main/data`
+
 ### Training InfoCon
 Use `train.sh` in directory `/`. Parameters:
 <details>
