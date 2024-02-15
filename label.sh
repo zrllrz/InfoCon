@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # setting your own task name, model name, and checkpoint
-TASK=
-MODEL_NAME=
-I=
-KEY_NAME=
+TASK=PickCube-v0
+MODEL_NAME=PC_TEST
+I=10
+KEY_NAME=key_test.txt
 
 cd src &&
 
-CUDA_VISIBLE_DEVICES=2 python label.py \
+CUDA_VISIBLE_DEVICES=0 python label.py \
   --task=$TASK \
   --control_mode=pd_joint_delta_pos \
   --obs_mode=state \

@@ -256,10 +256,10 @@ if __name__ == "__main__":
                     metric_dict['success'][j].append(info['success'])
 
         for k, v in metric_dict.items():
-            for vv in v:
-                print(str(int(np.any(vv))))
-                flog.write(str(int(np.any(vv))))
-            flog.write('\n')
+            # for vv in v:
+            #     print(str(int(np.any(vv))))
+            #     flog.write(str(int(np.any(vv))))
+            # flog.write('\n')
             v = np.mean([np.any(vv) for vv in v]) * 100
             output_str += f'{k} {v:.2f}, '
             output_dict[k] = v
