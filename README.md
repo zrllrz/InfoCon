@@ -1,7 +1,5 @@
 # InfoCon
-This is the official repository for:
-
-### **[InfoCon: Concept Discovery with Generative and Discriminative Informativeness](https://openreview.net/forum?id=g6eCbercEc&referrer=%5BAuthor%20Console%5D(%2Fgroup%3Fid%3DICLR.cc%2F2024%2FConference%2FAuthors%23your-submissions))**
+This is the official repository for: **[InfoCon: Concept Discovery with Generative and Discriminative Informativeness](https://openreview.net/forum?id=g6eCbercEc&referrer=%5BAuthor%20Console%5D(%2Fgroup%3Fid%3DICLR.cc%2F2024%2FConference%2FAuthors%23your-submissions))**
 
 <p align="center">
   <img src='github_teaser/infocon.png' width="700"><br>
@@ -9,6 +7,26 @@ This is the official repository for:
 <p align="center">
   <img src='github_teaser/gg_and_dg.jpg' width="700"><br>
 </p>
+
+## Environment
+### Hardware & OS
+
+64 CPUs, NVIDIA GeForce RTX 3090 (NVIDIA-SMI 530.30.02, Driver Version: 530.30.02, CUDA Version: 12.1), Ubuntu 20.04.6 LTS (GNU/Linux 5.15.0-83-generic x86_64)
+### Installation
+
+```
+conda create -n infocon python=3.9
+source activate infocon
+pip install -r requirements.txt
+```
+
+## Usage
+
+### Training
+
+### Labeling
+
+### CoTPC Evaluation
 
 ## CoTPC-main/
 relates to CoTPC downstream policies.
