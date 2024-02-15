@@ -29,7 +29,6 @@ pip install -r requirements.txt
 ### CoTPC Evaluation
 
 <div style='display: none'>
-
 ## CoTPC-main/
 relates to CoTPC downstream policies.
 * **data**: ManiSkill2 data-set.
@@ -37,7 +36,6 @@ relates to CoTPC downstream policies.
 * **scripts**: bash scripts for CoTPC training and evaluation.
 * **src**: src code related to CoTPC policies.
 * **save_model**: checkpoints of CoTPC policies.
-
 ## src/
 includes the codes of InfoCon, where
 * **modules** includes the used DNN modules
@@ -54,7 +52,6 @@ includes the codes of InfoCon, where
 * **label.py**: python scripts for labeling key states. Labeled out key states will be stored as .txt file in **CoTPC-main/data/$TASK_DIR$**.
 * **his.py**: calculate Human Intuition Score (HIS) when given labeled out key states.
 * **util.py**: other modules and functions.
-
 </div>
 
 
