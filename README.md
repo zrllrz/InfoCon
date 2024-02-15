@@ -165,8 +165,78 @@ Use `label.sh` in directory `/`. Parameters:
 
 Use `train.sh` in directory `/CoTPC-main/scripts/` to train CoTPC policies. Parameters:
 <details>
+
+`n_iters` default=1_600_000 type=int Number of training iterations
+
+`batch_size` default=256 type=int Batch size
+
+`init_lr` default='5e-4' type=str The initial learning rate
+
+`weight_decay` default='0' type=str Weight decay coefficient
+
+`beta1` default='0.9' type=str Beta1 in the Adam optimizer
+
+`beta2` default='0.95' type=str Beta2 in the Adam optimizer
+
+`dropout` default='0.0' type=str Dropout probability
+
+`lr_schedule` default='cos_decay_with_warmup' type=str The learning rate schedule.
+
+`key_state_coeff` default=0.0 type=float Coefficient for the key state prediction loss.
+
+`model_type` type=str default='s+a+cot' Model type for the CoTPC model (see GPTConfig).
+
+`vq_n_e` type=int default=10 Length of code book (number of entries) back in AutoCoT. Transform it into key_states and key_state_loss, which will cover the effect of other two args
+
+`key_states` type=str default='a' Which key states to use (see GPTConfig for the spec. format).
+
+`key_state_loss` default='' type=str Features out of what attention layers to use for key state prediction losses (see GPTConfig for the spec. format).
+
+`cot_decoder` type=str default='256' Specs of the CoT decoder.
+
+`model_name` default='' type=str Model name (for storing ckpts).
+
+`from_model_name` default='' type=str Name of the pretrained model.
+
+`from_ckpt` default=-1 type=int Ckpt of pretrained model.
+
+`task` type=str default='PickCube-v0' Task (env-id) in ManiSkill2.
+
+`control_mode` type=str default='pd_joint_delta_pos', Control mode used in envs from ManiSkill2.
+
+`obs_mode` type=str default='state' State mode used in envs from ManiSkill2.
+
+`seed` default=0 type=int Random seed for data spliting
+
+`num_traj` default=-1 type=int Number of training trajectories.
+
+`context_length` type=int default=60 Context size of CoTPC (the maximium length of sequences sampled from demo trajectories in training).
+
+`min_seq_length` type=int default=60 Mininum length of sequences sampled from demo trajectories in training.
+
+`save_every` default=40000 type=int Save model every ? iters.
+
+`log_every` default=2000 type=int log metrics every ? iters.
+
+`n_layer` default=4 type=int Number of attention layers.
+
+`n_head` default=8 type=int Number of attention heads.
+
+`n_embd` default=128 type=int Hidden feature dimension.
+
+`num_workers` default=2 type=int A positive number for fast async data loading.
+
+`multiplier` type=int default=20 Duplicate the dataset to reduce data loader overhead.
+
+`keys_name` type=str default="keys.txt" Duplicate the dataset to reduce data loader overhead.
+
+</details>
+
+Use `train.sh` in directory `/CoTPC-main/scripts/` to train CoTPC policies. Parameters:
+<details>
 :)
 </details>
+
 
 <!--
 ## CoTPC-main/
