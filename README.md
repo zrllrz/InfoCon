@@ -137,6 +137,10 @@ Use `train.sh` in director `/`. Parameters:
 </details>
 
 ### Labeling by InfoCon
+Use `label.sh` in director `/`. Parameters:
+<details>
+Releasing :)
+</details>>
 
 ### CoTPC Evaluation
 
