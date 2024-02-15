@@ -56,6 +56,7 @@ val_label.sh
 val_pc.sh
 val_test.sh
 .DS_Store
+.idea
 
 __pycache__
 lightning_logs
