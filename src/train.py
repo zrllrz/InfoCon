@@ -43,8 +43,6 @@ def parse_args():
     parser.add_argument("--dim_e", default=1024, type=int, help="Hidden feature dimension.")
 
     # Hyper-parameters regarding key_net, key_book, act_net, commit_net
-    # parser.add_argument("--n_rec_layer", default=4, type=int,
-    #                     help="Number of attention layers in RecNet")
     parser.add_argument("--n_key_layer", default=4, type=int,
                         help="Number of attention layers in KeyNet")
 
@@ -88,8 +86,6 @@ def parse_args():
                         help="Number of layers for state prediction in SANet")
     parser.add_argument("--n_action_layer", default=1, type=int,
                         help="Number of layers (after state prediction) for action prediction in SANet")
-    parser.add_argument("--use_pos_emb", action='store_true',
-                        help="if True, use key energy gradient to evaluate effect of key states, only use when resfc")
     parser.add_argument("--use_skip", action='store_true',
                         help="if True, use skip connection for HN generated net when using HN")
     parser.add_argument("--use_future_state", action='store_true',

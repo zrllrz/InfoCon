@@ -10,7 +10,7 @@ CUDA_VISIBLE_DEVICES=0 python train.py \
     --dropout=0.0 --n_head=8 --n_embd=128 --dim_key=128 --dim_e=128 \
     --n_key_layer=4 --n_rec_layer=4 --n_future_layer=2 \
     --vq_n_e=10 --vq_coe_ema=0.9 --KT=0.1 --vq_ema_ave --vq_use_st_emb --vq_st_emb_rate=1.2 --vq_coe_r_l1=0.0 --vq_use_r \
-    --sa_type=egpthn --n_state_layer=2 --n_action_layer=1 --use_pos_emb \
+    --sa_type=egpthn --n_state_layer=2 --n_action_layer=1 \
     --model_name=PC_TEST_ \
     --task=PickCube-v0 --control_mode=pd_joint_delta_pos --obs_mode=state --seed=0 \
     --num_traj=-1 --context_length=60 --min_seq_length=60 \

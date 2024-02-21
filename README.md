@@ -45,7 +45,7 @@ Use `train.sh` in directory `/`. Parameters:
 
 `init_lr` The initial learning rate.
 
-`weight_decay` Weight decay coefficient.
+`weight_decay` Weight decay coefficient used in optimizer. We always use AdamW.
 
 `beta1` Beta1 in the AdamW optimizer.
 
@@ -59,93 +59,89 @@ Use `train.sh` in directory `/`. Parameters:
 
 `milestones` (Make sure you're using `MultiStepLR`) Number of iterations before decay lr
 
-`gamma` (Make sure you're using `MultiStepLR`) Decay of lr after each milestone step
+`gamma` (Make sure you're using `MultiStepLR`) Decay of learning rate after each milestone step
 
 `n_head` Number of attention heads.
 
 `n_embd` Hidden feature dimension.
 
-`dim_key` Hidden feature dimension.
+`dim_key` dimension of 'key' feature vectors. Two usage: Select the compressed parameter for discriminative goal; Reconstruction regularization.
 
-`dim_e` Hidden feature dimension.
+`dim_e` dimension of compressed parameter vector for discriminative goal.
 
-`n_key_layer` Number of attention layers in KeyNet.
+`n_key_layer` Number of attention layers in KeyNet (ANN used for encoding input into feature vectors for two usage: Select the compressed parameter for discriminative goal; Reconstruction regularization).
 
-`n_rec_layer` Number of attention layers in RecNet.
+`n_rec_layer` Number of attention layers in RecNet (ANN used for reconstruction regularization).
 
-`n_future_layer` Number of attention layers in FutureNet.
+`n_future_layer` Number of attention layers in FutureNet (ANN used for extra prediction of action to next state).
 
-`vq_n_e` How many kinds of keys in the key_book.
+`vq_n_e` Max number of concepts by InfoCon.
 
-`vq_use_r` Use learnable radius of prototype.
+`vq_use_r` Use learnable radius of concept prototypes learnt by InfoCon.
 
-`vq_coe_ema` type=str default='0.95' ema moving rate.
+`vq_coe_ema` ema moving rate used for learning InfoCon code-book.
 
-`vq_ema_ave` action='store_true' average or not
+`vq_ema_ave` Whether to use average vector to update code-book or not. Suggest using it, otherwise it will be unbearable slow (and it seems to be a process which cannot be computed paralleled)
 
-`KT` type=str default='1.0' Temperature for classifier
+`KT` Temperature for classifier used in code-book of InfoCon
 
-`vq_use_ft_emb` action='store_true' use frequent time step embedding
+`vq_use_st_emb` Use spherical time step embedding
 
-`vq_use_st_emb` action='store_true' use spherical time step embedding
+`vq_st_emb_rate` Division rate for time sphere embedding
 
-`vq_st_emb_rate` default='1.2' type=str division rate for time sphere embedding
+`vq_coe_r_l1` Coefficient L1 regularization on length of every prototype
 
-`vq_coe_r_l1` default='0.0' type=str l1 regularization on length of every prototype
+`vq_use_prob_sel_train` If true, using prob sample when training
 
-`vq_use_prob_sel_train` action='store_true' If true, using prob sample when training
+`vq_use_timestep_appeal` If true, prototype will move close to time in time interval
 
-`vq_use_timestep_appeal` action='store_true' If true, prototype will move close to time in time interval
+`coe_cluster` Weighing coefficient Cluster weight
 
-`coe_cluster` default='0.1' type=str cluster weight
+`coe_rec` Weighing coefficient for RecNet (ANN used for reconstruction regularization).
 
-`coe_rec` default='1.0' type=str reconstruction weight from key_soft
+`use_decay_mask_rate` If true, we will mask up some of the update related to clustering, since at early stage of training, the clustering may not be right. The masking rate will decrease along with proceeding of training.
 
-`use_decay_mask_rate` action='store_true' mask cluster item when it's policy is too large
+`sa_type` (default 'egpthn' and we only implement this kind) type of SANet (ANN used for discriminative goal)
 
-`sa_type` default='gpt' type=str choices=['gpt', 'egpt', 'egpthn', 'resfc', 'hn'] type of sa_net
+`n_state_layer` Number of layers for state prediction in SANet (ANN used for discriminative goal)
 
-`n_state_layer` default=1 type=int Number of layers for state prediction in SANet
+`n_action_layer` Number of layers (after state prediction) for action prediction in SANet (ANN used for discriminative goal)
 
-`n_action_layer` default=1 type=int Number of layers (after state prediction) for action prediction in SANet
+`use_skip` If true, use skip connection for HN generated net when using HN
 
-`use_pos_emb` action='store_true', if True, use key energy gradient to evaluate effect of key states, only use when resfc
+`use_future_state` action='store_true' if True, we will append the future key states when training discriminative goal.
 
-`use_skip` action='store_true' if True, use skip connection for HN generated net when using HN
-
-`use_future_state` action='store_true' if True, we will append the future states
-
-`model_name` default='TEST' type=str Model name (for storing ckpts).
+`model_name` Model name prefix.
     
 `from_model_name` default='' type=str Name of the pretrained module.
 
-`from_ckpt` default=-1 type=int Ckpt of pretrained module.
+`from_ckpt` Ckpt number of pretrained module.
 
-`task` type=str default='PegInsertionSide-v0' Task (env-id) in ManiSkill2.
+`task` Task in ManiSkill2.
 
-`control_mode` type=str default='pd_joint_delta_pos' Control mode used in envs from ManiSkill2.
+`control_mode` Control mode used in envs from ManiSkill2.
 
-`obs_mode` type=str default='state' State mode used in envs from ManiSkill2.
+`obs_mode` State mode used in envs from ManiSkill2.
 
-`seed` default=0 type=int Random seed for data spliting.
+`seed` Random seed for data spliting.
 
-`num_traj` default=-1 type=int Number of training trajectories.
+`num_traj` Number of training trajectories.
 
-`context_length` type=int default=60 Context size of CoTPC (the maximium length of sequences sampled from demo trajectories in training).
+`context_length` The maximium length of sequences sampled from demo trajectories in training.
 
-`min_seq_length` type=int default=60 Mininum length of sequences sampled from demo trajectories in training.
+`min_seq_length` The mininum length of sequences sampled from demo trajectories in training.
 
-`save_every` default=10 type=int Save module every [input] epoch.
+`save_every` Save module every [input] epoch.
 
-`log_every` default=10 type=int log metrics every [input] iters.
+`log_every` Log metrics every [input] iters.
 
-`num_workers` default=5 type=int A positive number for fast async data loading.
+`num_workers` A positive number for fast async data loading.
 
-`multiplier` type=int default=52 Duplicate the dataset to reduce data loader overhead.
+`multiplier` Duplicate the dataset to reduce data loader overhead.
 
-`train_half` action='store_true' train half (do not optimize gen goal loss)
+`train_half` Train half (do not optimize gen goal loss)
 
-`train_mode` default='scratch' type=str training mode
+`train_mode` Training mode, Selection: `scratch`(Training from a scratch model with random initial parameters), `pretrain`(Training a model with trivial self-supervised learning method), `finetune`(Training a model based on a pretrained model).
 
 </details>
 
@@ -153,23 +149,21 @@ Use `train.sh` in directory `/`. Parameters:
 Use `label.sh` in directory `/`. Parameters:
 <details>
 
-`task` type=str default='PegInsertionSide-v0' Task (env-id) in ManiSkill2.
+`task` Task in ManiSkill2.
 
-`control_mode` type=str default='pd_joint_delta_pos' Control mode used in envs from ManiSkill2.
+`control_mode` Control mode used in envs from ManiSkill2.
 
-`obs_mode` type=str default='state' State mode used in envs from ManiSkill2.
+`obs_mode` State mode used in envs from ManiSkill2.
 
-`seed` default=0 type=int Random seed for data spliting.
+`seed` Random seed for data spliting.
 
-`n_traj` default=100 type=int num of validation trajectory.
+`n_traj` Number of validation trajectory.
 
-`model_name` default='' type=str Model name to be loaded.
+`model_name` Model name to be loaded.
 
-`from_ckpt` default=-1 type=int Ckpt of the module to be loaded.
+`from_ckpt` Ckpt number of the module to be loaded.
 
-`pause` action='store_true' debug
-
-`key_name` default="keys.txt" str file name of labeled out key states.
+`key_name` File name of labeled out key states.
 </details>
 
 ### CoTPC Evaluation
@@ -177,92 +171,92 @@ Use `label.sh` in directory `/`. Parameters:
 Use `train.sh` in directory `/CoTPC-main/scripts/` to train CoTPC policies. Parameters:
 <details>
 
-`n_iters` default=1_600_000 type=int Number of training iterations
+`n_iters` Number of training iterations
 
-`batch_size` default=256 type=int Batch size
+`batch_size` dBatch size
 
-`init_lr` default='5e-4' type=str The initial learning rate
+`init_lr` The initial learning rate
 
-`weight_decay` default='0' type=str Weight decay coefficient
+`weight_decay` Weight decay coefficient used in (AdamW) optimizer
 
-`beta1` default='0.9' type=str Beta1 in the Adam optimizer
+`beta1` Beta1 in the AdamW optimizer
 
-`beta2` default='0.95' type=str Beta2 in the Adam optimizer
+`beta2` Beta2 in the AdamW optimizer
 
-`dropout` default='0.0' type=str Dropout probability
+`dropout` Dropout probability
 
-`lr_schedule` default='cos_decay_with_warmup' type=str The learning rate schedule.
+`lr_schedule` Learning rate schedule. Selection: `CosineAnnealingLRWarmup`, `MultiStepLR`
 
-`key_state_coeff` default=0.0 type=float Coefficient for the key state prediction loss.
+`key_state_coeff` Coefficient for the key state prediction loss.
 
-`model_type` type=str default='s+a+cot' Model type for the CoTPC model (see GPTConfig).
+`model_type` Model type for the CoTPC model. Selection `s`, `s+a`, `s+cot`, `s+a+cot`
 
-`vq_n_e` type=int default=10 Length of code book (number of entries) back in AutoCoT. Transform it into key_states and key_state_loss, which will cover the effect of other two args
+`vq_n_e` Length of code book (number of entries) back in InfoCon. Transform it into key_states and key_state_loss, which will cover the effect of other two args
 
-`key_states` type=str default='a' Which key states to use (see GPTConfig for the spec. format).
+`key_states` Which key states to use (see GPTConfig for the spec. format).
 
-`key_state_loss` default='' type=str Features out of what attention layers to use for key state prediction losses (see GPTConfig for the spec. format).
+`key_state_loss` Features out of what attention layers to use for key state prediction losses.
 
-`cot_decoder` type=str default='256' Specs of the CoT decoder.
+`cot_decoder` Specs of the CoT decoder.
 
-`model_name` default='' type=str Model name (for storing ckpts).
+`model_name` Model name (for storing ckpts).
 
-`from_model_name` default='' type=str Name of the pretrained model.
+`from_model_name` Name of the pretrained model.
 
-`from_ckpt` default=-1 type=int Ckpt of pretrained model.
+`from_ckpt` Ckpt of pretrained model.
 
-`task` type=str default='PickCube-v0' Task (env-id) in ManiSkill2.
+`task` Task in ManiSkill2.
 
-`control_mode` type=str default='pd_joint_delta_pos', Control mode used in envs from ManiSkill2.
+`control_mode` Control mode used in envs from ManiSkill2.
 
-`obs_mode` type=str default='state' State mode used in envs from ManiSkill2.
+`obs_mode` State mode used in envs from ManiSkill2.
 
-`seed` default=0 type=int Random seed for data spliting
+`seed` Random seed for data spliting
 
-`num_traj` default=-1 type=int Number of training trajectories.
+`num_traj` Number of training trajectories.
 
-`context_length` type=int default=60 Context size of CoTPC (the maximium length of sequences sampled from demo trajectories in training).
+`context_length` Context size of CoTPC (the maximium length of sequences sampled from demo trajectories in training).
 
-`min_seq_length` type=int default=60 Mininum length of sequences sampled from demo trajectories in training.
+`min_seq_length` Mininum length of sequences sampled from demo trajectories in training.
 
-`save_every` default=40000 type=int Save model every ? iters.
+`save_every` Save model every [input] iters.
 
-`log_every` default=2000 type=int log metrics every ? iters.
+`log_every` log metrics every [input] iters.
 
-`n_layer` default=4 type=int Number of attention layers.
+`n_layer` Number of attention layers.
 
-`n_head` default=8 type=int Number of attention heads.
+`n_head` Number of attention heads.
 
-`n_embd` default=128 type=int Hidden feature dimension.
+`n_embd` Hidden feature dimension.
 
-`num_workers` default=2 type=int A positive number for fast async data loading.
+`num_workers` A positive number for fast async data loading.
 
-`multiplier` type=int default=20 Duplicate the dataset to reduce data loader overhead.
+`multiplier` Duplicate the dataset to reduce data loader overhead.
 
-`keys_name` type=str default="keys.txt" Duplicate the dataset to reduce data loader overhead.
+`keys_name` Duplicate the dataset to reduce data loader overhead.
 
 </details>
 
 Use `eval.sh`in directory `/CoTPC-main/scripts/` to train CoTPC policies. Parameters:
 <details>
 
-`task` type=str default='PickCube-v0' Task (env-id) in ManiSkill2.
+`task` Task in ManiSkill2.
 
-`control_mode` type=str default='pd_joint_delta_pos' Control mode used in envs from ManiSkill2.
+`control_mode` Control mode used in envs from ManiSkill2.
 
-`obs_mode` type=str default='state' State mode used in envs from ManiSkill2.
+`obs_mode` State mode used in envs from ManiSkill2.
 
-`seed` default=0 type=int, Random seed for data spliting.
+`seed` Random seed for data spliting.
 
-`model_name` default='' type=str Model name to be loaded.
+`model_name` dModel name to be loaded.
 
-`from_ckpt` default=-1 type=int Ckpt of the model to be loaded.
+`from_ckpt` Ckpt of the model to be loaded.
 
-`eval_max_steps` default=200 type=int Max steps allowed in eval.
+`eval_max_steps` Max steps allowed in eval.
 
-`cot_decoder` type=str default='256' Specs of the CoT decoder.
+`cot_decoder` Specs of the CoT decoder.
 
-`n_env` type=int default=25 Num of process for eval.
+`n_env` Number of processes for eval.
 
 </details>
 
