@@ -1,3 +1,4 @@
+.vscode
 bash_scripts
 checkpoints
 CoTPC-main/scripts/cat_eval.sh
