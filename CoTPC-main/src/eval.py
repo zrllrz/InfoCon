@@ -174,14 +174,13 @@ if __name__ == "__main__":
         length_all = len(json_data["episodes"])
         ids = []
         for i in range(5):  # Hard-code the 5 data splits for permutation.
-            t_ids = np.random.permutation(length_all // 5)[:100]
+            t_ids = np.random.permutation(length_all // 5)[:params['num_traj'] // 5]
             t_ids += i * length_all // 5
             ids.append(t_ids)
         eval_ids = np.concatenate(ids)
     else:
-        # Only evaluate at most 500 scene configs.
         eval_ids = np.random.permutation(
-            len(json_data["episodes"]))[:params['num_traj']][:800]
+            len(json_data["episodes"]))[:params['num_traj']][:params['num_traj']]
 
     n_env = args.n_env  # Number of parallel environments.
     assert len(eval_ids) % n_env == 0, f'{len(eval_ids)}'
