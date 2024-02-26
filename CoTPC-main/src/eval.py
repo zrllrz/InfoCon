@@ -165,8 +165,7 @@ if __name__ == "__main__":
         length_all = len(json_data["episodes"])
         ids = []
         for i in range(10):  # Hard-code the 10 data splits for permutation.
-            t_ids = np.random.permutation(
-                length_all // 10)[:params['num_traj'] // 10]
+            t_ids = np.random.permutation(length_all // 10)[:params['num_traj'] // 10]
             t_ids += i * length_all // 10
             ids.append(t_ids)
         eval_ids = np.concatenate(ids)
@@ -181,6 +180,7 @@ if __name__ == "__main__":
     else:
         eval_ids = np.random.permutation(
             len(json_data["episodes"]))[:params['num_traj']][:params['num_traj']]
+    print("seen env. num:", len(eval_ids))
 
     n_env = args.n_env  # Number of parallel environments.
     assert len(eval_ids) % n_env == 0, f'{len(eval_ids)}'
@@ -213,58 +213,57 @@ if __name__ == "__main__":
     metric_dict = defaultdict(lambda: [[] for _ in range(len(eval_ids))])
 
     success_list = []
+    
+    for start_idx in tqdm(range(0, len(eval_ids), n_env)):
+        reset_args_list = []
+        for i in range(start_idx, min(start_idx + n_env, len(eval_ids))):
+            reset_kwargs = json_data["episodes"][eval_ids[i]]['reset_kwargs']
+            reset_args_list.append(reset_kwargs)
 
-    if args.task != 'StackCube-v0':
-        for start_idx in tqdm(range(0, len(eval_ids), n_env)):
-            reset_args_list = []
-            for i in range(start_idx, min(start_idx + n_env, len(eval_ids))):
-                reset_kwargs = json_data["episodes"][eval_ids[i]]['reset_kwargs']
-                reset_args_list.append(reset_kwargs)
+        s = torch.from_numpy(envs.reset(reset_args_list)).float()
+        state_hist, action_hist, t = [s], [], np.zeros([n_env])
 
-            s = torch.from_numpy(envs.reset(reset_args_list)).float()
-            state_hist, action_hist, t = [s], [], np.zeros([n_env])
+        for step in range(args.eval_max_steps):
+            a = predict(model, action_hist, state_hist, t).cpu().numpy()
 
-            for step in range(args.eval_max_steps):
-                a = predict(model, action_hist, state_hist, t).cpu().numpy()
+            s, _, _, infos = envs.step(a)
+            # print(infos[24])
+            s = torch.from_numpy(s).float()
 
-                s, _, _, infos = envs.step(a)
-                # print(infos[24])
-                s = torch.from_numpy(s).float()
+            action_hist, state_hist, t = update(
+                model, action_hist, state_hist, a, s, t)
 
-                action_hist, state_hist, t = update(
-                    model, action_hist, state_hist, a, s, t)
+            # Update metrics.
+            for i, info in enumerate(infos):
+                j = start_idx + i
+            # You might want to use these additional metrics.
+            # if args.task == 'PickCube-v0':
+            #     metric_dict['is_grasped'][j].append(info['is_grasped'])
+            # if args.task == 'StackCube-v0':
+            #     metric_dict['is_cubaA_grasped'][j].append(info['is_cubaA_grasped'])
+            #     metric_dict['is_cubeA_on_cubeB'][j].append(info['is_cubeA_on_cubeB'])
+            # if args.task == 'PegInsertionSide-v0':
+            #     metric_dict['is_grasped'][j].append(info['is_grasped'])
+            #     metric_dict['pre_inserted'][j].append(info['pre_inserted'])
+            # if args.task == 'TurnFaucet-v0':
+            #     metric_dict['is_contacted'][j].append(info['is_contacted'])
+            # if args.task == 'PushChair-v1':
+            #     metric_dict['close_to_target'][j].append(info['chair_close_to_target'])
+            #     metric_dict['static_at_last'][j].append(
+            #         info['chair_close_to_target'] and info['chair_static'])
+                metric_dict['success'][j].append(info['success'])
 
-                # Update metrics.
-                for i, info in enumerate(infos):
-                    j = start_idx + i
-                # You might want to use these additional metrics.
-                # if args.task == 'PickCube-v0':
-                #     metric_dict['is_grasped'][j].append(info['is_grasped'])
-                # if args.task == 'StackCube-v0':
-                #     metric_dict['is_cubaA_grasped'][j].append(info['is_cubaA_grasped'])
-                #     metric_dict['is_cubeA_on_cubeB'][j].append(info['is_cubeA_on_cubeB'])
-                # if args.task == 'PegInsertionSide-v0':
-                #     metric_dict['is_grasped'][j].append(info['is_grasped'])
-                #     metric_dict['pre_inserted'][j].append(info['pre_inserted'])
-                # if args.task == 'TurnFaucet-v0':
-                #     metric_dict['is_contacted'][j].append(info['is_contacted'])
-                # if args.task == 'PushChair-v1':
-                #     metric_dict['close_to_target'][j].append(info['chair_close_to_target'])
-                #     metric_dict['static_at_last'][j].append(
-                #         info['chair_close_to_target'] and info['chair_static'])
-                    metric_dict['success'][j].append(info['success'])
-
-        for k, v in metric_dict.items():
-            # for vv in v:
-            #     print(str(int(np.any(vv))))
-            #     flog.write(str(int(np.any(vv))))
-            # flog.write('\n')
-            v = np.mean([np.any(vv) for vv in v]) * 100
-            output_str += f'{k} {v:.2f}, '
-            output_dict[k] = v
-        output_str = output_str[:-2]
-        print(output_str)
-        flog.write(output_str + '\n')
+    for k, v in metric_dict.items():
+        # for vv in v:
+        #     print(str(int(np.any(vv))))
+        #     flog.write(str(int(np.any(vv))))
+        # flog.write('\n')
+        v = np.mean([np.any(vv) for vv in v]) * 100
+        output_str += f'{k} {v:.2f}, '
+        output_dict[k] = v
+    output_str = output_str[:-2]
+    print(output_str)
+    flog.write(output_str + '\n')
 
     # Unseen scene configurations.
     # Unseen objects for peg insertion and seen objects otherwise.
