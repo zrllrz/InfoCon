@@ -291,7 +291,7 @@ if __name__ == "__main__":
         for eval_id in eval_ids:
             all_reset_kwargs.append(json_data["episodes"][eval_id]['reset_kwargs'])
     elif args.task == 'PegInsertionSide-v0':
-        for i in range(100):
+        for i in range(400):
             all_reset_kwargs.append({'seed': i + 2000})
     else:
         for i in range(100):
