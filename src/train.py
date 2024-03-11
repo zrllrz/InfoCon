@@ -40,7 +40,7 @@ def parse_args():
     parser.add_argument("--n_head", default=8, type=int, help="Number of attention heads.")
     parser.add_argument("--n_embd", default=128, type=int, help="Hidden feature dimension.")
     parser.add_argument("--dim_key", default=128, type=int, help="Hidden feature dimension.")
-    parser.add_argument("--dim_e", default=1024, type=int, help="Hidden feature dimension.")
+    parser.add_argument("--dim_e", default=128, type=int, help="Hidden feature dimension.")
 
     # Hyper-parameters regarding key_net, key_book, act_net, commit_net
     parser.add_argument("--n_key_layer", default=4, type=int,
