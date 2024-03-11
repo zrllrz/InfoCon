@@ -52,7 +52,7 @@ def parse_args():
     parser.add_argument("--n_future_layer", default=4, type=int,
                         help="Number of attention layers in FutureNet")
 
-    parser.add_argument('--vq_n_e', type=int, default=100,
+    parser.add_argument('--vq_n_e', type=int, default=10,
                         help="How many kinds of keys in the key_book")
     parser.add_argument("--vq_use_r", action='store_true',
                         help="use learnable radius of prototype")
